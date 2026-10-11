@@ -36,7 +36,9 @@ typedef struct
 
 
 heap_op_e insert_node(heap_t* heap, thread_t* thread, uint32_t order);
-heap_op_e remove_node(heap_t* heap);
+heap_op_e remove_head(heap_t* heap);
+heap_op_e remove_node(heap_t* heap, size_t index);
+heap_op_e balance_node(heap_t* heap, size_t index, uint32_t order);
 heap_op_e pop_heap(heap_t* heap, thread_t** thread);
 
 

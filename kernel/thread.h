@@ -4,6 +4,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include "system.h"
 
 
@@ -38,6 +39,14 @@ typedef enum
     PERIODIC,
 }   thread_periodicity_e;
 
+
+typedef enum 
+{
+    INCOMING_THREADS,
+    OUTGOING_THREADS,
+    DEAD_HEAP,
+    REL_HEAP,
+}   thread_owner_e;
 
 
 typedef struct
@@ -77,6 +86,8 @@ typedef struct __attribute__((aligned(8))) //Stack should start 8-aligned
     metrics_t metrics;
 
     uint32_t id;
+    size_t heap_index;
+    thread_owner_e owner;
 
     cpu_core_e core;
 }   thread_t;

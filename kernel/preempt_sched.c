@@ -200,6 +200,7 @@ thread_t* add_thread_to_core(cpu_core_e core, sys_exit_e (*func)(void), uint32_t
     new_thread->period = period;
     new_thread->periodicity = periodicity;
     new_thread->id = id;
+    new_thread->owner = INCOMING_THREADS;
 
     new_thread->func = func;
     new_thread->sp = (char*)(((uintptr_t)(new_thread->stack + THREAD_STACK_SIZE)) & ~(uintptr_t)0x7); //8-byte align sp so processor doesn't abort
@@ -230,6 +231,7 @@ sys_exit_e kill_thread(thread_t* thread)
 
     thread->periodicity = APERIODIC;
     thread->thread_status = FINISHED;
+    thread->owner = OUTGOING_THREADS;
     g_cpus[thread->core].utilization -= thread->metrics.prev_u;
     thread->metrics.prev_u = 0;
     unlock_mutex(&(g_cpus[thread->core].thread_mutex));
@@ -245,6 +247,66 @@ sys_exit_e kill_thread(thread_t* thread)
     return SYS_OK;
 }
 
+
+
+sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
+{
+    uint32_t irq_state;
+
+    cpu_core_e core = curr_core();
+    __asm__ __volatile__("mrs %0, cpsr\n\t"
+                         "cpsid i"
+                         : "=r"(irq_state) :: "memory");
+
+
+    lock_mutex_persistent(&(g_cpus[core].thread_mutex));
+
+    sys_exit_e ret = SYS_OK;
+
+    if ((thread->thread_status == FINISHED && thread->periodicity == APERIODIC) || thread->owner == OUTGOING_THREADS) ret = SYS_ERROR; //Can't suspend something that's finished and won't run again
+
+    if (ret == SYS_OK)
+    {
+        uint32_t ticks = g_cpus[core].ticks;
+
+        if (geq_wrapped(thread->release_time, ticks + delay)) ret = SYS_ERROR; //Can't run until at least delay ticks anyway
+
+        if (ret == SYS_OK)
+        {
+
+            thread->release_time = ticks + delay;
+
+            if (geq_wrapped(ticks, thread->deadline)) //If past deadline start clean
+            {
+                thread->deadline = thread->release_time + thread->period;
+            }
+
+            else 
+            {
+                uint32_t delta = thread->deadline - ticks;
+                thread->deadline = thread->release_time + delta;
+            }
+
+
+            if (thread->owner == DEAD_HEAP)
+            {
+                thread->owner = REL_HEAP;
+                remove_node(g_cpus[core].deadHeap, thread->heap_index);
+                insert_node(g_cpus[core].relHeap, thread, thread->release_time);
+            }
+
+            else if(thread->owner == REL_HEAP)
+            {
+                balance_node(g_cpus[core].relHeap, thread->heap_index, thread->release_time);
+            }
+        }
+    }
+
+    unlock_mutex(&(g_cpus[core].thread_mutex));
+
+    __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
+    return ret;
+}
 
 
 
@@ -406,6 +468,7 @@ static inline bool next_up(cpu_core_e core)
         thread->dirty = false;
         thread->thread_status = PENDING;
 
+        thread->owner = DEAD_HEAP;
         insert_node(g_cpus[core].deadHeap, thread, thread->deadline);
     }
 
@@ -415,8 +478,8 @@ static inline bool next_up(cpu_core_e core)
     while (g_cpus[core].relHeap->curr_index > 0 && geq_wrapped(g_cpus[core].ticks, g_cpus[core].relHeap->heap[0].thread->release_time))
     {
         pop_heap(g_cpus[core].relHeap, &thread);
-        // thread->dirty = false;
-        //thread->thread_status = PENDING; No longer assume its always pending
+
+        thread->owner = DEAD_HEAP;
         insert_node(g_cpus[core].deadHeap, thread, thread->deadline);
     }
 
@@ -438,8 +501,6 @@ static inline bool next_up(cpu_core_e core)
 
         if (thread->thread_status == FINISHED)
         {
-            // pop_heap(g_cpus[core].deadHeap, &thread);
-            remove_node(g_cpus[core].deadHeap);
 
             if (thread->periodicity == PERIODIC)
             {
@@ -455,26 +516,27 @@ static inline bool next_up(cpu_core_e core)
                     thread->release_time += thread->period;
                 }   while (thread->release_time < thread->deadline - thread->period);
 
-                if (geq_wrapped(g_cpus[core].ticks, thread->release_time)) //Will nominally fire on equality
-                {
-                    thread->dirty = false;
-                    thread->thread_status = PENDING;
-                    insert_node(g_cpus[core].deadHeap, thread, thread->deadline);
-                }
 
-                else //Add to release heap
+                thread->dirty = false;
+                thread->thread_status = PENDING;
+                
+
+                if (lt_wrapped(g_cpus[core].ticks, thread->release_time))
                 {
-                    thread->dirty = false;
-                    thread->thread_status = PENDING;
+                    remove_head(g_cpus[core].deadHeap);
+                    thread->owner = REL_HEAP;
                     insert_node(g_cpus[core].relHeap, thread, thread->release_time);
                 }
+
+                else balance_node(g_cpus[core].deadHeap, thread->heap_index, thread->deadline);
 
                 continue;
             }
 
             else if (thread->periodicity == APERIODIC)
             {
-                // kFree(thread);
+                remove_head(g_cpus[core].deadHeap);
+                thread->owner = OUTGOING_THREADS;
                 fifo_push(g_cpus[core].outgoing_threads, thread);
                 continue;
             }
@@ -488,16 +550,7 @@ static inline bool next_up(cpu_core_e core)
 
         if(thread->thread_status == PENDING || thread->thread_status == RUNNING)
         {
-            if (!geq_wrapped(g_cpus[core].ticks, thread->release_time)) //Thread got suspended
-            {
-                thread->deadline = thread->release_time + thread->period;
-                // pop_heap(g_cpus[core].deadHeap, &thread);
-                remove_node(g_cpus[core].deadHeap);
-                insert_node(g_cpus[core].relHeap, thread, thread->release_time);
-                continue;
-            }
             
-
             if (geq_wrapped(g_cpus[core].ticks, thread->deadline) && !thread->dirty)
             {
                 thread->dirty = true;
