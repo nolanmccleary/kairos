@@ -1258,11 +1258,11 @@ def main(bootable: bool = False) -> None:
         "g_edf_u_values", "g_edf_u_count", "g_edf_u_index", "g_edf_u_permille",
         "g_edf_periods", "g_edf_C", "g_edf_done", "g_sched_trace", "g_trace_len", "g_test_release",
         "g_alloc_samples", "g_rmw_samples", "g_matmul_samples",
-        "ktrace_bp_edf_ready", "ktrace_bp_edf_done", "fault_trap", "g_fault",
+        "ktrace_bp_alloc_done", "ktrace_bp_edf_ready", "ktrace_bp_edf_done", "fault_trap", "g_fault",
         "g_error_message", "g_error_ctx", "g_edf_bad_thread",
         "g_bal_assign", "g_bal_periods", "ktrace_bp_balance_ready", "ktrace_bp_balance_done",
         "g_ctxsw_switch", "g_ctxsw_resume", "g_ctxsw_switch_count", "g_ctxsw_resume_count",
-        "g_irqlat", "g_mutex_unc", "g_mutex_con", "g_micro_phase",
+        "g_irqlat", "g_mutex_unc", "g_mutex_con", "ktrace_bp_micro_done", "g_micro_phase",
         "g_memlat_sdram_rd", "g_memlat_sdram_wr", "g_memlat_ocram_rd", "g_memlat_ocram_wr",
         "g_memlat_baseline",
         "ktrace_bp_suspend_done", "g_susp_phase",
@@ -1322,10 +1322,10 @@ def main(bootable: bool = False) -> None:
 
         # Control panel: comment a phase to skip it (also comment its call in main.c).
         try:
-            # alloc_metrics, warmup = allocbench(ocd, symbols)   # swapped out: see main.c (OCRAM room for suspend)
+            alloc_metrics, warmup = allocbench(ocd, symbols)
             edf_results, traces, cpu1_traces = edf_test(ocd, symbols, num_cpus, periods, u_values)
             balance = balance_test(ocd, symbols, num_cpus)
-            # micro = micro_test(ocd, symbols)   # swapped out: see main.c (OCRAM one page short)
+            micro = micro_test(ocd, symbols)
             suspend = suspend_test(ocd, symbols)
         except KeyboardInterrupt:
             # Ctrl-C usually means the run hung -- dump where both cores are stuck

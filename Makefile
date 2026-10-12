@@ -130,9 +130,20 @@ LIBGCC := $(shell $(CC) -mcpu=cortex-a9 -marm -print-libgcc-file-name)
 # Build
 # ---------------------------------------------------------------------------
 
-build/test.elf: $(CORE) $(LDSCRIPT)
-	mkdir -p build
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(CORE) $(LIBGCC)
+# Compile to named objects (mirrored under build/) so the linker can place text
+# by object-file path -- bench/workload_*.o -> SDRAM .appcode, everything else OCRAM.
+OBJ := $(patsubst %,build/%.o,$(basename $(CORE)))
+
+build/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build/%.o: %.s
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build/test.elf: $(OBJ) $(LDSCRIPT)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJ) $(LIBGCC)
 	$(OBJDUMP) -d $@ > build/test.dis
 
 
@@ -155,12 +166,15 @@ test: build/test.elf
 # ---------------------------------------------------------------------------
 
 boot:
-	rm -f build/test.elf
+	rm -rf build
 	$(MAKE) BOOT_TEST=1 build/test.elf
-	$(OBJCOPY) -O binary build/test.elf build/preloader.bin
-	@echo "preloader.bin: $$(wc -c < build/preloader.bin) bytes (must fit the boot ROM OCRAM budget)"
+	$(OBJCOPY) -O binary -R .appcode build/test.elf build/preloader.bin
+	$(OBJCOPY) -O binary -j .appcode build/test.elf build/app.bin
+	@echo "preloader.bin: $$(wc -c < build/preloader.bin) bytes (OCRAM; must fit the boot ROM budget)"
+	@echo "app.bin:       $$(wc -c < build/app.bin) bytes (SDRAM app/test code; load_from_sd reads this from SD)"
 	mkimage -T socfpgaimage -d build/preloader.bin build/preloader.img && echo "wrote build/preloader.img"
 	FLASH_DRYRUN=$(FLASH_DRYRUN) bash scripts/flash_sd.sh build/preloader.img
+	@echo "NOTE: app.bin must still be written to the card at SD_APPCODE_LBA (see bsp/sd.c) -- flash_sd.sh does not place it yet."
 
 
 clean:

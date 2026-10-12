@@ -1,0 +1,5 @@
+op,count,mean_cyc,min_cyc,max_cyc
+malloc,512,282,282,489
+free,512,169,168,705
+malloc_loaded,512,282,282,405
+free_loaded,512,165,165,172

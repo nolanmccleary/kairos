@@ -9,6 +9,7 @@
 #include "tlsf.h"
 #include "preempt_sched.h"
 #include "pmu.h"
+#include "sd.h"
 
 #if ENABLE_DCACHE && !ENABLE_MMU
 #error ENABLE_DCACHE requires ENABLE_MMU
@@ -320,7 +321,9 @@ void cpu0_startup(void)
 
     pmu_init();
     heap_init();        // must precede psched_init(): it kMalloc's main_thread + the deque
-    
+
+    load_from_sd();
+
 
 #if ENABLE_SMP
     g_cpu_mailbox_uncached = 1;

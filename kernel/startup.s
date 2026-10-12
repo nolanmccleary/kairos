@@ -234,9 +234,8 @@ host_shared_sdram_zero:
     @; str r1, [r0]
     @; dsb
     @; sev
-    bl load_from_sd         @; copy the SDRAM appcode region in from SD before entering main
     ldr r0, =main           @; main lives in OCRAM; absolute address resolved at link time
-    blx r0
+    blx r0                  @; (SDRAM appcode already copied in by load_from_sd() inside cpu0_startup)
 
 
 

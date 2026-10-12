@@ -16,6 +16,8 @@
 set -eu
 
 IMG="${1:-build/preloader.img}"
+APP="$(dirname "$IMG")/app.bin"       # SDRAM app/test blob, read by load_from_sd()
+APP_OFFSET_SECTORS=512                 # must match APP_OFFSET_SECTORS in bsp/sd.c (256 KiB in)
 
 echo "flash_sd: locating the DE1-SoC microSD ..."
 
@@ -82,6 +84,9 @@ echo "flash_sd: image $IMG ($img_bytes B -> $write_bytes B written, 0xA2 slice i
 
 if [ "${FLASH_DRYRUN:-0}" = "1" ]; then
     echo "flash_sd: DRY RUN -- would: diskutil unmountDisk $disk && sudo dd if=$IMG of=/dev/r$a2 bs=$BS conv=sync"
+    if [ -f "$APP" ]; then
+        echo "flash_sd: DRY RUN -- would: sudo dd if=$APP of=/dev/r$a2 bs=512 seek=$APP_OFFSET_SECTORS conv=sync  ($(wc -c < "$APP" | tr -d ' ') B)"
+    fi
     exit 0
 fi
 
@@ -105,8 +110,31 @@ echo "flash_sd: verifying ..."
 if sudo dd if="/dev/r$a2" bs=$BS count=$(( write_bytes / BS )) 2>/dev/null \
         | head -c "$img_bytes" | cmp -s - "$IMG"; then
     echo "flash_sd: verify OK ($img_bytes bytes match)."
-    echo "flash_sd: done. Power-cycle the board to self-boot; then: python test.py --bootable"
 else
     echo "flash_sd: VERIFY FAILED -- the 0xA2 partition does not match the image." >&2
     exit 1
 fi
+
+# Place the SDRAM app blob inside the SAME 0xA2 partition, APP_OFFSET_SECTORS in --
+# past the preloader (and the boot ROM's copy slots). load_from_sd() finds this
+# partition's start LBA from the MBR and reads from here.
+if [ -f "$APP" ]; then
+    app_bytes=$(wc -c < "$APP" | tr -d ' ')
+    app_end=$(( APP_OFFSET_SECTORS * 512 + app_bytes ))
+    if [ -n "$a2_bytes" ] && [ "$app_end" -gt "$a2_bytes" ]; then
+        echo "flash_sd: app.bin end ($app_end B) exceeds the 0xA2 partition ($a2_bytes B) -- refusing" >&2
+        exit 1
+    fi
+    echo "flash_sd: writing app.bin ($app_bytes B) at sector $APP_OFFSET_SECTORS of the 0xA2 partition ..."
+    sudo dd if="$APP" of="/dev/r$a2" bs=512 seek=$APP_OFFSET_SECTORS conv=sync
+    sync
+    rb=$(sudo dd if="/dev/r$a2" bs=512 skip=$APP_OFFSET_SECTORS count=$(( (app_bytes + 511) / 512 )) 2>/dev/null | head -c "$app_bytes" | cmp -s - "$APP" && echo OK || echo BAD)
+    if [ "$rb" = OK ]; then
+        echo "flash_sd: app.bin verify OK ($app_bytes bytes match)."
+    else
+        echo "flash_sd: app.bin VERIFY FAILED." >&2
+        exit 1
+    fi
+fi
+
+echo "flash_sd: done. Power-cycle the board to self-boot; then: python test.py --bootable"

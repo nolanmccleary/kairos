@@ -72,14 +72,13 @@ SECTIONS
      * Empty until bench/*.o is relocated here (and flash_sd.sh writes app.bin).
      * --------------------------------------------------------------------- */
 
-    .appcode ORIGIN(SDRAM) + _appcode_offset (NOLOAD) :
+    .appcode ORIGIN(SDRAM) + _appcode_offset :
     {
         . = ALIGN(8);
         _appcode_start = .;
-        /* TODO: move the workloads here once app.bin is flashed, e.g.
-         *   bench/workload_edf.o(.text* .rodata*)
-         *   bench/workload_suspend.o(.text* .rodata*)
-         *   bench/workload_allocbench.o(.text* .rodata*) ...            */
+        *workload_*.o(.text*)   /* workload CODE only. .rodata stays in OCRAM: the host reads the
+                                 * const config (g_edf_u_count/periods/u_values) at the boot gate,
+                                 * before cpu0_startup brings SDRAM up. NOT ktrace/telemetry. */
         . = ALIGN(8);
         _appcode_end = .;
     } > SDRAM
