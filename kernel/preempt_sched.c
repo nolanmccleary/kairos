@@ -24,6 +24,17 @@ static thread_fifo_t outgoing_fifos[NUM_CPUS];
 
 
 
+#define SAVE_SYS_SP(dst) \
+    __asm__ __volatile__("cps #0x1f\n\t" "mov %0, sp\n\t" "cps #0x12\n\t" : "=r"(dst))
+
+#define LOAD_SYS_SP(src) \
+    __asm__ __volatile__("cps #0x1f\n\t" "mov sp, %0\n\t" "cps #0x12\n\t" :: "r"(src) : "memory")
+
+#define SWITCH_FRAME_AND_RETURN(sp) \
+    __asm__ __volatile__("mov sp, %0\n\t" "pop {lr}\n\t" "pop {r0-r12}\n\t" "RFEFD sp!\n\t" :: "r"(sp) : "memory")
+
+
+
 
 
 //////////////////////////////// STATICS //////////////////////////////////////////
@@ -182,13 +193,7 @@ static inline bool next_up(cpu_core_e core)
 
 static void thread_exit()
 {
-    uint32_t svc_sp_entry;
-    __asm__ __volatile__("cpsid i\n"
-            "cps 0x13\n"
-            "mov %0, sp\n"
-            : "=r"(svc_sp_entry)
-            :
-            : "memory");
+    __asm__ __volatile__("cpsid i" ::: "memory");
 
     cpu_core_e core = curr_core();
     lock_mutex_persistent(&(g_cpus[core].thread_mutex));
@@ -211,30 +216,18 @@ static void thread_exit()
             /* fall through */
 
         case RUNNING:
-            __asm__ __volatile__ (
-                "cps 0x1f\n"
-                "mov sp, %0\n"
-                "cps 0x13\n"
-                :
-                : "r"(g_cpus[core].curr_thread->sp)
-            );
+        {
+            char* new_sp = g_cpus[core].curr_thread->sp;
 
             unlock_mutex(&(g_cpus[core].thread_mutex));
 
-            __asm__ __volatile__ (
-                "mov sp, %0\n"
-                "cps 0x1f\n"
-                "pop {lr}\n"
-                "pop {r0-r12}\n"
-                "RFEFD sp!"
-                :
-                : "r"(svc_sp_entry)
-                : "memory"
-            );
+            SWITCH_FRAME_AND_RETURN(new_sp);
+            __builtin_unreachable();
+        }
 
             break;
 
-        FINISHED: 
+        case FINISHED: 
             break;
 
         default:
@@ -285,6 +278,13 @@ sys_exit_e psched_core_init(void)
     lock_mutex_persistent(&g_allocator_mutex);
     g_cpus[core].main_thread = (thread_t*)kMalloc(sizeof(thread_t));
     unlock_mutex(&g_allocator_mutex);
+
+    if (g_cpus[core].main_thread == NULL) //can't bring up the core without an idle/boot TCB
+    {
+        unlock_mutex(&(g_cpus[core].thread_mutex));
+        __asm__ __volatile__("cpsie i" ::: "memory");
+        return SYS_ERROR;
+    }
 
     g_cpus[core].main_thread->thread_status = RUNNING;
     g_cpus[core].main_thread->sp = sp;
@@ -367,15 +367,8 @@ sys_exit_e psched_deinit(void)
 
 
 
-thread_t* add_thread(sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
+static inline thread_t* enqueue_new_thread(cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
 {
-    static cpu_core_e tie_default = CPU0;
-
-    cpu_core_e core;
-    if (g_cpus[CPU0].utilization < g_cpus[CPU1].utilization) core = CPU0;
-    else if (g_cpus[CPU1].utilization < g_cpus[CPU0].utilization) core = CPU1;
-    else { core = tie_default; tie_default = (tie_default == CPU0) ? CPU1 : CPU0; }
-
     uint32_t irq_state;
     __asm__ __volatile__("mrs %0, cpsr\n\t"
                          "cpsid i"
@@ -385,39 +378,11 @@ thread_t* add_thread(sys_exit_e (*func)(void), uint32_t period, thread_periodici
     thread_t* new_thread = (thread_t*)kMalloc(sizeof(thread_t));
     unlock_mutex(&g_allocator_mutex);
 
-    new_thread->period = period;
-    new_thread->periodicity = periodicity;
-    new_thread->id = id;
-
-    new_thread->func = func;
-    new_thread->sp = (char*)(((uintptr_t)(new_thread->stack + THREAD_STACK_SIZE)) & ~(uintptr_t)0x7); //8-byte align sp so processor doesn't abort
-
-    new_thread->core = core;
-    init_metrics(new_thread);
-
-    lock_mutex_persistent(&(g_cpus[core].thread_mutex));
-    fifo_push(g_cpus[core].incoming_threads, new_thread);
-    unlock_mutex(&(g_cpus[core].thread_mutex));
-
-    __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
-
-
-    return new_thread;
-}
-
-
-
-thread_t* add_thread_to_core(cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
-{
-    uint32_t irq_state;
-    __asm__ __volatile__("mrs %0, cpsr\n\t"
-                         "cpsid i"
-                         : "=r"(irq_state) :: "memory");
-
-
-    lock_mutex_persistent(&g_allocator_mutex);
-    thread_t* new_thread = (thread_t*)kMalloc(sizeof(thread_t));
-    unlock_mutex(&g_allocator_mutex);
+    if (new_thread == NULL) //heap exhausted; restore caller's IRQ state and report failure
+    {
+        __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
+        return NULL;
+    }
 
     new_thread->period = period;
     new_thread->periodicity = periodicity;
@@ -438,6 +403,27 @@ thread_t* add_thread_to_core(cpu_core_e core, sys_exit_e (*func)(void), uint32_t
 
 
     return new_thread;
+}
+
+
+
+thread_t* add_thread(sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
+{
+    static cpu_core_e tie_default = CPU0;
+
+    cpu_core_e core;
+    if (g_cpus[CPU0].utilization < g_cpus[CPU1].utilization) core = CPU0;
+    else if (g_cpus[CPU1].utilization < g_cpus[CPU0].utilization) core = CPU1;
+    else { core = tie_default; tie_default = (tie_default == CPU0) ? CPU1 : CPU0; }
+
+    return enqueue_new_thread(core, func, period, periodicity, id);
+}
+
+
+
+thread_t* add_thread_to_core(cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
+{
+    return enqueue_new_thread(core, func, period, periodicity, id);
 }
 
 
@@ -488,7 +474,7 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
 
     sys_exit_e ret = SYS_OK;
 
-    if ((thread->thread_status == FINISHED && thread->periodicity == APERIODIC) || thread->owner == OUTGOING_THREADS) ret = SYS_ERROR; //Can't suspend something that's finished and won't run again
+    if ((thread->thread_status == FINISHED && thread->periodicity == APERIODIC) || thread->owner == OUTGOING_THREADS || thread->owner == INCOMING_THREADS) ret = SYS_ERROR; //Can't suspend something that's finished and won't run again
 
     if (ret == SYS_OK)
     {
@@ -557,16 +543,7 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
 
         unlock_mutex(&(g_cpus[core].thread_mutex));
 
-        __asm__ __volatile__ (
-
-            "mov sp, %0\n"
-            "pop {lr}\n"
-            "pop {r0-r12}\n"
-            "RFEFD sp!\n"
-            :
-            : "r"(new_sp)
-            : "memory"
-        );
+        SWITCH_FRAME_AND_RETURN(new_sp);
         __builtin_unreachable();
     }
 
@@ -602,12 +579,7 @@ inline void next_thread()
 
             g_cpus[core].ticks++;
 
-            __asm__ __volatile__ (
-                "cps #0x1f\n"
-                "mov %0, sp\n"
-                "cps #0x12\n"
-                : "=r"(g_cpus[core].curr_thread->sp)
-            );
+            SAVE_SYS_SP(g_cpus[core].curr_thread->sp);
 
 
             if (g_cpus[core].curr_thread != g_cpus[core].main_thread)
@@ -630,14 +602,7 @@ inline void next_thread()
             {
                 g_cpus[core].curr_thread = g_cpus[core].main_thread;
 
-                __asm__ __volatile__ (
-                    "cps #0x1F\n"
-                    "mov sp, %0\n"
-                    "cps #0x12\n"
-                    :
-                    : "r"(g_cpus[core].main_thread->sp)
-                    : "memory"
-                );
+                LOAD_SYS_SP(g_cpus[core].main_thread->sp);
 
                 unlock_mutex(&(g_cpus[core].thread_mutex));
                 return;
@@ -660,13 +625,7 @@ inline void next_thread()
                     /* fall through */
 
                 case RUNNING:
-                    __asm__ __volatile__ (
-                        "cps #0x1F\n"
-                        "mov sp, %0\n"
-                        "cps #0x12\n"
-                        :
-                        : "r"(g_cpus[core].curr_thread->sp)
-                    );
+                    LOAD_SYS_SP(g_cpus[core].curr_thread->sp);
                     break;
 
                 default:
@@ -700,14 +659,7 @@ inline void next_thread()
 
             if (g_cpus[core].curr_thread != g_cpus[core].main_thread)
             {
-                __asm__ __volatile__ (
-                    "cps #0x1f\n"
-                    "mov sp, %0\n"
-                    "cps #0x12\n"
-                    :
-                    : "r"(g_cpus[core].main_thread->sp)
-                    : "memory"
-                );
+                LOAD_SYS_SP(g_cpus[core].main_thread->sp);
             }
             __asm__ __volatile__ ("dmb sy" ::: "memory");
             kFree(g_cpus[core].main_thread);
