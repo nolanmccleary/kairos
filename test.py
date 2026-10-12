@@ -29,6 +29,8 @@ ALLOC_METRICS = 7
 TRACE_TICKS   = 2400      # g_sched_trace capacity (must match workload_edf.c)
 GANTT_WINDOW  = 720       # ticks shown in the Gantt (>1 hyperperiod)
 COMFORTABLE_U = 700       # always plot this under-capacity trial as a baseline
+SUSP_TICKS    = 64        # suspend-test per-scenario run-tick capture depth (must match workload_suspend.c)
+SUSP_SLACK    = 3         # ticks of scheduling slack allowed on a measured suspension delay
 
 
 # --- target ABI -------------------------------------------------------------
@@ -839,6 +841,35 @@ def plot_memlat(res: MicroResult, path: Path) -> None:
     plt.close(fig)
 
 
+def plot_suspend(res: SuspendResult, path: Path) -> None:
+    # Two raster rows of the ticks each task actually ran at; the shaded band is
+    # the requested suspension window, which should contain no run marks.
+    fig, axes = plt.subplots(2, 1, figsize=(10, 4.2), sharex=False)
+
+    def row(ax, title, run_ticks, start, width):
+        if run_ticks:
+            ax.eventplot([list(run_ticks)], colors="#1f77b4", lineoffsets=0, linelengths=0.8)
+        if start:
+            ax.axvspan(start, start + width, color="#d62728", alpha=0.18,
+                       label=f"suspended {width} ticks")
+            ax.legend(loc="upper right", fontsize=8)
+        ax.set_title(title, fontsize=10)
+        ax.set_yticks([])
+        ax.set_xlabel("scheduler tick")
+
+    # self: the suspension starts at the activation that called suspend_thread.
+    self_start = res.self_ticks[3] if len(res.self_ticks) > 3 else 0
+    row(axes[0], "self-suspend: suspender run ticks", res.self_ticks, self_start, res.self_requested)
+    row(axes[1], "suspend-another: victim run ticks", res.other_ticks,
+        res.other_suspend_tick, res.other_requested)
+
+    fig.suptitle("suspend_thread -- a run gap of the requested width at the suspension point",
+                 fontsize=11)
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
+
+
 # --- phases -----------------------------------------------------------------
 def allocbench(ocd: OCD, symbols: dict[str, int]) -> tuple[list[Metric], dict[str, dict[str, list[int]]]]:
     bp = symbols["ktrace_bp_alloc_done"]
@@ -1058,6 +1089,103 @@ def micro_test(ocd: OCD, symbols: dict[str, int]) -> MicroResult:
     return res
 
 
+@dataclass(frozen=True)
+class SuspendResult:
+    # scenario A: a task suspends itself (forced context switch + resume)
+    self_requested: int            # delay ticks asked for
+    self_measured:  int            # ticks actually elapsed across the suspend call
+    self_resumed:   bool           # the task returned from suspend_thread at all
+    self_regs_ok:   bool           # callee-saved sentinels survived the resume
+    self_ticks:     tuple[int, ...]   # tick of each suspender activation
+    # scenario B: a controller suspends a different (non-running) victim
+    other_requested:    int        # delay ticks asked for
+    other_suspend_tick: int        # tick the suspend was issued
+    other_last_pre:     int        # last victim run before the suspend
+    other_first_post:   int        # first victim run after the suspend
+    other_ticks:        tuple[int, ...]   # tick of each victim activation
+
+    @property
+    def other_gap(self) -> int:
+        return self.other_first_post - self.other_suspend_tick
+
+
+def suspend_test(ocd: OCD, symbols: dict[str, int]) -> SuspendResult:
+    bp_done = symbols["ktrace_bp_suspend_done"]
+    bp_fault = symbols["fault_trap"]
+
+    # Firmware is parked on bp_balance_done (micro is swapped out). The edf/balance
+    # breakpoints are all behind us now -- free them (including the one we're halted
+    # on) so we stay under the Cortex-A9 6-HW-breakpoint cap, then arm suspend-done.
+    for name in ("ktrace_bp_edf_ready", "ktrace_bp_edf_done",
+                 "ktrace_bp_balance_ready", "ktrace_bp_balance_done"):
+        ocd.remove_hw_breakpoint(symbols[name])
+    ocd.add_hw_breakpoint(bp_done)
+
+    # Both scenarios are self-terminating (budget-capped); poll rather than one
+    # long wait_halt, and read g_susp_phase so a stall names the failing scenario.
+    ocd.continue_from_breakpoint()
+
+    deadline = time.time() + 60.0
+    while True:
+        time.sleep(1.5)
+        ocd.halt()
+        pc = ocd.pc()
+        if pc == bp_done:
+            break
+        if pc == bp_fault:
+            raise RuntimeError(ocd.diagnose())
+        phase = ocd.read_u32(symbols["g_susp_phase"])
+        if time.time() > deadline:
+            raise RuntimeError(f"suspend stalled in phase {phase} "
+                               f"(1=self 2=other 3=done), pc=0x{pc:08x}:\n{ocd.diagnose()}")
+        print(f"  suspend running: phase={phase} pc=0x{pc:08x}")
+        ocd.resume()
+
+    def ticks(sym: str, n_sym: str) -> tuple[int, ...]:
+        n = min(ocd.read_u32(symbols[n_sym]), SUSP_TICKS)
+        return tuple(ocd.read_words(symbols[sym], n)) if n else ()
+
+    res = SuspendResult(
+        self_requested=ocd.read_u32(symbols["g_susp_self_requested_delay"]),
+        self_measured =ocd.read_u32(symbols["g_susp_self_delay"]),
+        self_resumed  =bool(ocd.read_u32(symbols["g_susp_self_resumed"])),
+        self_regs_ok  =bool(ocd.read_u32(symbols["g_susp_self_regs_ok"])),
+        self_ticks    =ticks("g_susp_self_ticks", "g_susp_self_n"),
+        other_requested   =ocd.read_u32(symbols["g_susp_other_requested_delay"]),
+        other_suspend_tick=ocd.read_u32(symbols["g_susp_other_suspend_tick"]),
+        other_last_pre    =ocd.read_u32(symbols["g_susp_other_last_pre"]),
+        other_first_post  =ocd.read_u32(symbols["g_susp_other_first_post"]),
+        other_ticks       =ticks("g_susp_other_ticks", "g_susp_other_n"),
+    )
+
+    print("\nsuspend_thread:")
+    print(f"  self  : requested={res.self_requested} measured={res.self_measured} "
+          f"resumed={res.self_resumed} regs_ok={res.self_regs_ok}")
+    print(f"  other : requested={res.other_requested} suspend@{res.other_suspend_tick} "
+          f"last_pre={res.other_last_pre} first_post={res.other_first_post} gap={res.other_gap}")
+
+    # --- assertions: this is a pass/fail test, not just a measurement ---
+    errs: list[str] = []
+    if not res.self_resumed:
+        errs.append("self-suspend: task never returned from suspend_thread (forced switch/resume broken)")
+    if not res.self_regs_ok:
+        errs.append("self-suspend: callee-saved registers corrupted across resume")
+    if not (res.self_requested <= res.self_measured <= res.self_requested + SUSP_SLACK):
+        errs.append(f"self-suspend: measured delay {res.self_measured} not in "
+                    f"[{res.self_requested}, {res.self_requested + SUSP_SLACK}]")
+    if res.other_first_post == 0:
+        errs.append("suspend-another: victim never ran again after being suspended")
+    elif not (res.other_requested <= res.other_gap <= res.other_requested + SUSP_SLACK):
+        errs.append(f"suspend-another: victim gap {res.other_gap} not in "
+                    f"[{res.other_requested}, {res.other_requested + SUSP_SLACK}]")
+    if res.other_last_pre and res.other_suspend_tick and res.other_last_pre > res.other_suspend_tick:
+        errs.append("suspend-another: victim ran after the suspend tick but before the delay elapsed")
+    if errs:
+        raise RuntimeError("suspend_thread test FAILED:\n  " + "\n  ".join(errs))
+
+    return res
+
+
 def write_artifacts(outdir: Path, alloc_metrics: list[Metric], edf_results: list[EDFResult],
                     traces: dict[int, bytes], periods: tuple[int, ...],
                     cpu1_traces: dict[int, bytes] | None = None,
@@ -1130,13 +1258,18 @@ def main(bootable: bool = False) -> None:
         "g_edf_u_values", "g_edf_u_count", "g_edf_u_index", "g_edf_u_permille",
         "g_edf_periods", "g_edf_C", "g_edf_done", "g_sched_trace", "g_trace_len", "g_test_release",
         "g_alloc_samples", "g_rmw_samples", "g_matmul_samples",
-        "ktrace_bp_alloc_done", "ktrace_bp_edf_ready", "ktrace_bp_edf_done", "fault_trap", "g_fault",
+        "ktrace_bp_edf_ready", "ktrace_bp_edf_done", "fault_trap", "g_fault",
         "g_error_message", "g_error_ctx", "g_edf_bad_thread",
         "g_bal_assign", "g_bal_periods", "ktrace_bp_balance_ready", "ktrace_bp_balance_done",
         "g_ctxsw_switch", "g_ctxsw_resume", "g_ctxsw_switch_count", "g_ctxsw_resume_count",
-        "g_irqlat", "g_mutex_unc", "g_mutex_con", "ktrace_bp_micro_done", "g_micro_phase",
+        "g_irqlat", "g_mutex_unc", "g_mutex_con", "g_micro_phase",
         "g_memlat_sdram_rd", "g_memlat_sdram_wr", "g_memlat_ocram_rd", "g_memlat_ocram_wr",
-        "g_memlat_baseline"))
+        "g_memlat_baseline",
+        "ktrace_bp_suspend_done", "g_susp_phase",
+        "g_susp_self_requested_delay", "g_susp_self_delay", "g_susp_self_resumed",
+        "g_susp_self_regs_ok", "g_susp_self_ticks", "g_susp_self_n",
+        "g_susp_other_requested_delay", "g_susp_other_suspend_tick", "g_susp_other_last_pre",
+        "g_susp_other_first_post", "g_susp_other_ticks", "g_susp_other_n"))
     if bootable:
         require_symbols(symbols, ("g_boot_release",))
 
@@ -1146,6 +1279,7 @@ def main(bootable: bool = False) -> None:
 
     balance: BalanceResult | None = None
     micro: MicroResult | None = None
+    suspend: SuspendResult | None = None
 
     outdir = RESULTS_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1188,10 +1322,11 @@ def main(bootable: bool = False) -> None:
 
         # Control panel: comment a phase to skip it (also comment its call in main.c).
         try:
-            alloc_metrics, warmup = allocbench(ocd, symbols)
+            # alloc_metrics, warmup = allocbench(ocd, symbols)   # swapped out: see main.c (OCRAM room for suspend)
             edf_results, traces, cpu1_traces = edf_test(ocd, symbols, num_cpus, periods, u_values)
             balance = balance_test(ocd, symbols, num_cpus)
-            micro = micro_test(ocd, symbols)
+            # micro = micro_test(ocd, symbols)   # swapped out: see main.c (OCRAM one page short)
+            suspend = suspend_test(ocd, symbols)
         except KeyboardInterrupt:
             # Ctrl-C usually means the run hung -- dump where both cores are stuck
             # (+ any fault record) before the socket closes. fault_addr/num_cpus are
@@ -1226,6 +1361,18 @@ def main(bootable: bool = False) -> None:
         plot_irqlat(micro, outdir / "irqlat.png")
         plot_mutex(micro, outdir / "mutex.png")
         plot_memlat(micro, outdir / "memlat.png")
+    if suspend is not None:
+        _write_micro_csv(outdir / "suspend.csv",
+                         [("self_run_ticks", suspend.self_ticks), ("victim_run_ticks", suspend.other_ticks)],
+                         extra=[["self_requested", suspend.self_requested],
+                                ["self_measured", suspend.self_measured],
+                                ["self_resumed", int(suspend.self_resumed)],
+                                ["self_regs_ok", int(suspend.self_regs_ok)],
+                                ["other_requested", suspend.other_requested],
+                                ["other_suspend_tick", suspend.other_suspend_tick],
+                                ["other_first_post", suspend.other_first_post],
+                                ["other_gap", suspend.other_gap]])
+        plot_suspend(suspend, outdir / "suspend.png")
     print(f"\nPASS   artifacts in {outdir}")
 
 

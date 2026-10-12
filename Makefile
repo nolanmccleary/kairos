@@ -56,6 +56,7 @@ CORE := \
 	bench/workload_rmw.c \
 	bench/workload_matmul.c \
 	bench/workload_micro.c \
+	bench/workload_suspend.c \
 	kernel/mutex.s \
 
 
@@ -86,6 +87,8 @@ CFLAGS := \
 	-g \
 	-ffreestanding \
 	-nostdlib \
+	-ffunction-sections \
+	-fdata-sections \
 	-I. \
 	-Ibsp \
 	-Ikernel \
@@ -110,6 +113,7 @@ CFLAGS := \
 LDFLAGS := \
 	-T $(LDSCRIPT) \
 	-Wl,--build-id=none \
+	-Wl,--gc-sections \
 	-Wl,-Map=build/test.map \
 	-Wl,--defsym=_cfg_enable_mmu=$(ENABLE_MMU) \
 	-Wl,--defsym=_cfg_enable_dcache=$(ENABLE_DCACHE) \

@@ -36,7 +36,9 @@ const uint32_t g_edf_u_values[] =
 };
 
 
-const uint32_t g_edf_u_count = ARRAY_LEN(g_edf_u_values);
+/* volatile so the firmware actually loads it (no const-fold) and the symbol
+ * survives --gc-sections -- the host reads it to learn the sweep length. */
+const volatile uint32_t g_edf_u_count = ARRAY_LEN(g_edf_u_values);
 
 
 const uint32_t g_edf_periods[NTASKS] =

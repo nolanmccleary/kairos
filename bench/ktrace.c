@@ -86,6 +86,18 @@ void ktrace_bp_micro_done(void)
 }
 
 
+KTRACE_BP_ATTR
+void ktrace_bp_suspend_done(void)
+{
+    __asm__ __volatile__(
+        "nop"
+        :
+        :
+        : "memory"
+    );
+}
+
+
 void ktrace_wait_release(void)
 {
     g_test_release = 0u;

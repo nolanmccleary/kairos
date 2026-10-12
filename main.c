@@ -25,6 +25,7 @@ void matmul_run(void);
 void edf_run(void);
 void edf_balance_run(void);
 void micro_run(void);
+void suspend_run(void);
 
 void main(void)
 {
@@ -32,16 +33,17 @@ void main(void)
 #if defined(MODE_TEST)
     __asm__ __volatile__("cpsid if" ::: "memory");
 
-    allocbench_run();   /* slots 0-3 */
-    rmw_run();          /* slots 4-5 */
-    matmul_run();       /* slot 6   */
+    // allocbench_run();   /* slots 0-3 -- swapped out to make OCRAM room for suspend_run */
+    // rmw_run();          /* slots 4-5 -- swapped out */
+    // matmul_run();       /* slot 6   -- swapped out */
 
 
-    KTRACE_ALLOC_DONE();
+    // KTRACE_ALLOC_DONE();
 
     edf_run();
     edf_balance_run();
-    micro_run();
+    // micro_run();   /* swapped out earlier */
+    suspend_run();
 #endif
 
     for (;;) { }

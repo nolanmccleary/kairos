@@ -369,6 +369,8 @@ sys_exit_e psched_deinit(void)
 
 static inline thread_t* enqueue_new_thread(cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
 {
+    if (period == 0u) return NULL; //a zero period collapses deadline onto release_time; disallow it at admission
+
     uint32_t irq_state;
     __asm__ __volatile__("mrs %0, cpsr\n\t"
                          "cpsid i"
