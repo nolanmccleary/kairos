@@ -55,11 +55,7 @@ static inline void prime_thread(thread_t* thread)
     *(--sp) = 0; // r1
     *(--sp) = 0; //(uint32_t)&thread->thread_status; // r0
 
-    uint32_t adjustment = ((uint32_t)sp) & 4;
-    sp = (uint32_t*)((uint32_t)sp - adjustment);
-
     *(--sp) = (uint32_t)thread_exit; //lr
-    *(--sp) = adjustment; //store adjustment
 
     thread->sp = (char*)sp;
     thread->thread_status = RUNNING;
@@ -228,8 +224,7 @@ static void thread_exit()
             __asm__ __volatile__ (
                 "mov sp, %0\n"
                 "cps 0x1f\n"
-                "pop {r1, lr}\n"
-                "add sp, sp, r1\n"
+                "pop {lr}\n"
                 "pop {r0-r12}\n"
                 "RFEFD sp!"
                 :
@@ -559,8 +554,7 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
 
             "mov sp, %0\n"
             "cps 0x1f\n"
-            "pop {r1, lr}\n"
-            "add sp, sp, r1\n"
+            "pop {lr}\n"
             "pop {r0-r12}\n"
             "RFEFD sp!"
             :

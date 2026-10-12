@@ -197,6 +197,9 @@ host_ocram_zero:
 @; RELEASE CPU1 -> it re-enters _reset_handler and forks on MPIDR
 .if ENABLE_SMP != 0
  .if BOARD_IS_QEMU != 0
+    @; QEMU vexpress-a9 starts BOTH cores at the ELF entry (_reset_handler) -- no pen,
+    @; no powered-off secondary, no PSCI. CPU1 self-starts and routes to _cpu1_fork on
+    @; MPIDR, so nothing to release here. (Verified: thread 2 sits at _reset_handler.)
     nop
  .else
     ldr r0, =SYSMGR_ROMCODE_CPU1STARTADDR
@@ -319,7 +322,7 @@ _abort_handler:
 @;2) after going back to sys mode, lr_sys stores last sys LR
 _irq_handler:
     sub lr, lr, #4 @; get lr_irq i.e. get the last pre-interrupt PC value
-    srsfd sp!, #0x1f @; Store Return State Full Descending --- push lr_irq (cached pc) and spsr_irq (cached spsr) onto sysmode stack (specified by 0x1f), sp autodecs
+    srsfd sp!, #0x1f @; Store Return State Full Descending --- push cpsr then pc (cached spsr then lr_irq in this case) onto sysmode stack (specified by 0x1f), sp autodecs
     
     cps #0x1f @; Change Processor State --- switch to system mode
     cpsid i @; Change Processor State Interrupt Disable --- no nested interrupts for now
@@ -329,9 +332,7 @@ _irq_handler:
                   @; task's calls) must be part of the saved context -- saving only the
                   @; AAPCS caller-saved set corrupts a resumed task's r4-r11.
 
-    and r1, sp, #4 @; 8-byte align sp
-    sub sp, sp, r1
-    push {r1, lr} @; push adjustment and lr_sys onto sysmode stack
+    push {lr} @; push lr_sys onto sysmode stack
 
     
     cps #0x12
@@ -341,8 +342,7 @@ _irq_handler:
 
     cps #0x1f @; switch back to system mode
 
-    pop {r1, lr} @; restore lr_sys
-    add sp, sp, r1 @; unadjust stack
+    pop {lr} @; restore lr_sys
 
     pop {r0-r12} @; restore the FULL integer register file for the resumed task
 
