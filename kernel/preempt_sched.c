@@ -472,18 +472,14 @@ sys_exit_e kill_thread(thread_t* thread)
 sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
 {
     uint32_t irq_state;
-    uint32_t svc_sp;
-    void* resume_pc = &&resume;
 
     cpu_core_e core = thread->core;
     cpu_core_e currCore = curr_core();
 
-    __asm__ __volatile__("mrs %0, cpsr\n"
+    __asm__ __volatile__("mrs %0, cpsr\n" //TODO: See if this should be changed to cpsr_c
                          "cpsid i\n"
-                         "cps 0x13\n"
-                         "mov %1, sp\n"
 
-                         : "=r"(irq_state),"=r"(svc_sp)  //= denotes write-only, r denotes general purpose register
+                         : "=r"(irq_state)  //= denotes write-only, r denotes general purpose register
                          :
                          : "memory");
 
@@ -531,15 +527,23 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
     
     if (ret == SYS_OK && currCore == core && thread == g_cpus[core].curr_thread) //If the target thread is the current one we need to force a context switch 
     {
-        uint32_t* sp;
+        void* resume_pc = &&resume;
+        void* ra = __builtin_return_address(0);
+        uint32_t curr_cpsr;
 
-        __asm__ __volatile__ ( 
-            "cps 0x1f\n"
-            "mov %0, sp\n"
-            "cps 0x13\n"
-            :   "=r"(sp)
-            :
-            :
+        __asm__ goto ( 
+            "mrs %0, cpsr\n"
+            "push {%0}\n"
+            "push {%2}\n"
+            "push {r0-r12}\n"
+            "push {%3}\n"
+
+            "mov %1, sp\n"
+
+            :   "=&r"(curr_cpsr),"=r"(g_cpus[core].curr_thread->sp)
+            :   "r"(resume_pc),"r"(ra)
+            :   "memory"
+            :   resume
         );
 
         switch_out(g_cpus[core].curr_thread);
@@ -549,38 +553,28 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
         }
         switch_in(g_cpus[core].curr_thread);
 
+        char* new_sp = g_cpus[core].curr_thread->sp;
+
+        unlock_mutex(&(g_cpus[core].thread_mutex));
 
         __asm__ __volatile__ (
 
             "mov sp, %0\n"
-            "cps 0x1f\n"
             "pop {lr}\n"
             "pop {r0-r12}\n"
-            "RFEFD sp!"
+            "RFEFD sp!\n"
             :
-            : "r"(svc_sp)
+            : "r"(new_sp)
             : "memory"
         );
+        __builtin_unreachable();
     }
 
 
-
-    else 
-    {
-        __asm__ __volatile__ (
-            "mov sp, %0\n"
-            "cps 0x1f\n"
-            :
-            : "r"(svc_sp)
-            : "memory"
-        );
-    }
-
-
+    else unlock_mutex(&(g_cpus[core].thread_mutex));
 
 
     resume:
-        unlock_mutex(&(g_cpus[core].thread_mutex));
         __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
         return ret;
 }
