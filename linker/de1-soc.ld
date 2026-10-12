@@ -26,6 +26,8 @@ _und_stack_size = 0x200;
 
 _bank_size = 0x80;
 
+_appcode_offset = 0x00100000;   /* 1 MB: free SDRAM below the heap, above the mmu tables */
+
 _heap_offset = 0x200000;
 _heap_size   = 0x01000000;
 
@@ -59,6 +61,27 @@ SECTIONS
         . = . + 256 * 4;       /* 256 L2 entries x 4 bytes = 1024 bytes */
 
         _mmu_tables_end = .;
+    } > SDRAM
+
+
+
+    /* ---------------------------------------------------------------------
+     * SDRAM application/test code, copied in from the SD card by load_from_sd()
+     * after SDRAM is up (see bsp/sd.c). NOLOAD: it is NOT in preloader.bin -- the
+     * boot ROM only loads the OCRAM kernel; this region arrives from app.bin on SD.
+     * Empty until bench/*.o is relocated here (and flash_sd.sh writes app.bin).
+     * --------------------------------------------------------------------- */
+
+    .appcode ORIGIN(SDRAM) + _appcode_offset (NOLOAD) :
+    {
+        . = ALIGN(8);
+        _appcode_start = .;
+        /* TODO: move the workloads here once app.bin is flashed, e.g.
+         *   bench/workload_edf.o(.text* .rodata*)
+         *   bench/workload_suspend.o(.text* .rodata*)
+         *   bench/workload_allocbench.o(.text* .rodata*) ...            */
+        . = ALIGN(8);
+        _appcode_end = .;
     } > SDRAM
 
 
