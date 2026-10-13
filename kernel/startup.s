@@ -228,7 +228,7 @@ host_shared_sdram_zero:
     blt host_shared_sdram_zero
 .endif
 
-    @; cpsie i
+    cpsie i
     @; ldr r0, =g_cpu_mailbox_uncached
     @; mov r1, #1
     @; str r1, [r0]

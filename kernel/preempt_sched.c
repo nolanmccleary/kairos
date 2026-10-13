@@ -251,9 +251,8 @@ static void thread_exit()
 
 sys_exit_e psched_core_init(void)
 {
-    __asm__ __volatile__("cpsid i" ::: "memory");
     cpu_core_e core = curr_core();
-    lock_mutex_persistent(&(g_cpus[core].thread_mutex));
+    lock_mutex_persistent(&(g_cpus[core].thread_mutex));   // serializes the rebuild vs next_thread; no cpsid needed
 
     char* sp;
     __asm__ __volatile__ ("mov %0, sp" : "=r"(sp));
@@ -282,7 +281,7 @@ sys_exit_e psched_core_init(void)
     if (g_cpus[core].main_thread == NULL) //can't bring up the core without an idle/boot TCB
     {
         unlock_mutex(&(g_cpus[core].thread_mutex));
-        __asm__ __volatile__("cpsie i" ::: "memory");
+        // __asm__ __volatile__("cpsie i" ::: "memory");
         return SYS_ERROR;
     }
 
@@ -299,7 +298,7 @@ sys_exit_e psched_core_init(void)
     unlock_mutex(&(g_cpus[core].thread_mutex));
 
     __asm__ __volatile__("dmb sy" ::: "memory");
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    // __asm__ __volatile__("cpsie i" ::: "memory");
 
     return SYS_OK;
 }
@@ -308,7 +307,7 @@ sys_exit_e psched_core_init(void)
 
 sys_exit_e psched_core_deinit(void)
 {
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    // __asm__ __volatile__("cpsid i" ::: "memory");
     cpu_core_e core = curr_core();
 
     lock_mutex_persistent(&(g_cpus[core].thread_mutex));
@@ -316,7 +315,7 @@ sys_exit_e psched_core_deinit(void)
     unlock_mutex(&(g_cpus[core].thread_mutex));
 
     __asm__ __volatile__("dmb sy" ::: "memory");
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    // __asm__ __volatile__("cpsie i" ::: "memory");
     
     return SYS_OK;
 }
@@ -371,20 +370,11 @@ static inline thread_t* enqueue_new_thread(cpu_core_e core, sys_exit_e (*func)(v
 {
     if (period == 0u) return NULL; //a zero period collapses deadline onto release_time; disallow it at admission
 
-    uint32_t irq_state;
-    __asm__ __volatile__("mrs %0, cpsr\n\t"
-                         "cpsid i"
-                         : "=r"(irq_state) :: "memory");
-
     lock_mutex_persistent(&g_allocator_mutex);
     thread_t* new_thread = (thread_t*)kMalloc(sizeof(thread_t));
     unlock_mutex(&g_allocator_mutex);
 
-    if (new_thread == NULL) //heap exhausted; restore caller's IRQ state and report failure
-    {
-        __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
-        return NULL;
-    }
+    if (new_thread == NULL) return NULL;   //heap exhausted
 
     new_thread->period = period;
     new_thread->periodicity = periodicity;
@@ -400,9 +390,6 @@ static inline thread_t* enqueue_new_thread(cpu_core_e core, sys_exit_e (*func)(v
     lock_mutex_persistent(&(g_cpus[core].thread_mutex));
     fifo_push(g_cpus[core].incoming_threads, new_thread);
     unlock_mutex(&(g_cpus[core].thread_mutex));
-
-    __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
-
 
     return new_thread;
 }
@@ -433,9 +420,9 @@ thread_t* add_thread_to_core(cpu_core_e core, sys_exit_e (*func)(void), uint32_t
 sys_exit_e kill_thread(thread_t* thread)
 {
     uint32_t irq_state;
-    __asm__ __volatile__("mrs %0, cpsr\n\t"
-                         "cpsid i"
-                         : "=r"(irq_state) :: "memory");
+    // __asm__ __volatile__("mrs %0, cpsr\n\t"
+    //                      "cpsid i"
+    //                      : "=r"(irq_state) :: "memory");
 
     lock_mutex_persistent(&(g_cpus[thread->core].thread_mutex));
 
@@ -446,15 +433,10 @@ sys_exit_e kill_thread(thread_t* thread)
     thread->metrics.prev_u = 0;
     unlock_mutex(&(g_cpus[thread->core].thread_mutex));
 
-    __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
+    // __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
 
     return SYS_OK;
 }
-
-
-
-//TODO: Priority inheritance mechanism is necessary here to guarantee thread mutex deadlock will not happen!
-//At the moment is ok because cpsid used before every attempt to lock thread mutex but it's not mechanistically enforced
 
 
 sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
@@ -464,13 +446,12 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
     cpu_core_e core = thread->core;
     cpu_core_e currCore = curr_core();
 
-    __asm__ __volatile__("mrs %0, cpsr\n" //TODO: See if this should be changed to cpsr_c
-                         "cpsid i\n"
-
-                         : "=r"(irq_state)  //= denotes write-only, r denotes general purpose register
-                         :
-                         : "memory");
-
+    // __asm__ __volatile__("mrs %0, cpsr\n" 
+    //                      "cpsid i\n"
+    //
+    //                      : "=r"(irq_state)  //= denotes write-only, r denotes general purpose register
+    //                      :
+    //                      : "memory");
 
     lock_mutex_persistent(&(g_cpus[core].thread_mutex));
 
@@ -554,7 +535,7 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
 
 
     resume:
-        __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
+        // __asm__ __volatile__("msr cpsr_c, %0" :: "r"(irq_state) : "memory");
         return ret;
 }
 

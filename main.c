@@ -31,7 +31,7 @@ void main(void)
 {
 
 #if defined(MODE_TEST)
-    __asm__ __volatile__("cpsid if" ::: "memory");
+    // __asm__ __volatile__("cpsid if" ::: "memory");
 
     allocbench_run();   /* slots 0-3 */
     rmw_run();          /* slots 4-5 */

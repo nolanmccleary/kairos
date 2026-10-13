@@ -374,6 +374,12 @@ void edf_run(void)
      */
     heap_init();
     psched_init();
+    __asm__ __volatile__(
+            "cpsie i"
+            :
+            :
+            : "memory"
+    );
 
     for (uint32_t c = 0; c < NUM_CPUS; c++)
     {
