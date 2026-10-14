@@ -79,6 +79,7 @@ typedef struct
     uint32_t period;
     uint32_t release_time;
     uint32_t deadline;
+    uint32_t ticks_landed;
     bool dirty;
 }   thread_timing_t;
 

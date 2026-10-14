@@ -219,18 +219,23 @@ static inline bool next_up(cpu_core_e core)
 
             if (thread->md.status != FINISHED)
             {
+                thread->timing.ticks_landed++;
+
                 if (geq_wrapped(g_cpus[core].ticks, thread->timing.deadline))
                 {
                     thread->timing.release_time = g_cpus[core].ticks;
                     thread->timing.deadline = g_cpus[core].ticks + thread->timing.period;
 
-                    if (fifo->size > 1)
+                    //Will switch when <period> ticks spent inside thread; Persistent thread may be preempted by periodic halfway through for example
+                    //When available to run again we should go back to the last persistent thread that was filling its window.
+                    if (fifo->size > 1 && thread->timing.ticks_landed >= thread->timing.period) 
                     {
+                        thread->timing.ticks_landed = 0;
                         fifo_push(fifo, fifo_pop(fifo));
                         continue;
                     }
                 }
-
+                
 
                 g_cpus[core].curr_thread = thread;
                 thread_found = true;
@@ -253,13 +258,16 @@ static inline bool next_up(cpu_core_e core)
 
             if (thread->md.status != FINISHED)
             {
+                thread->timing.ticks_landed++;
+
                 if (geq_wrapped(g_cpus[core].ticks, thread->timing.deadline))
                 {
                     thread->timing.release_time = g_cpus[core].ticks;
                     thread->timing.deadline = g_cpus[core].ticks + thread->timing.period;
 
-                    if (fifo->size > 1)
+                    if (fifo->size > 1 && thread->timing.ticks_landed >= thread->timing.period)
                     {
+                        thread->timing.ticks_landed = 0;
                         fifo_push(fifo, fifo_pop(fifo));
                         continue;
                     }
@@ -287,13 +295,16 @@ static inline bool next_up(cpu_core_e core)
 
             if (thread->md.status != FINISHED)
             {
+                thread->timing.ticks_landed++;
+
                 if (geq_wrapped(g_cpus[core].ticks, thread->timing.deadline))
                 {
                     thread->timing.release_time = g_cpus[core].ticks;
                     thread->timing.deadline = g_cpus[core].ticks + thread->timing.period;
 
-                    if (fifo->size > 1)
+                    if (fifo->size > 1 && thread->timing.ticks_landed >= thread->timing.period)
                     {
+                        thread->timing.ticks_landed = 0;
                         fifo_push(fifo, fifo_pop(fifo));
                         continue;
                     }
@@ -580,6 +591,7 @@ static inline thread_t* enqueue_new_persistent_thread(cpu_core_e core, sys_exit_
     if (new_thread == NULL) return NULL; 
 
     new_thread->timing.period = PERSISTENT_SLICE_TICKS;                 // unused for persistent; sliced by PERSISTENT_SLICE_TICKS
+    new_thread->timing.ticks_landed = 0;
     new_thread->md.periodicity = PERSISTENT;
     new_thread->md.priority = priority;
     new_thread->id = id;

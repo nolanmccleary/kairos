@@ -1,4 +1,4 @@
-# Bootable A9 RTOS from Scratch
+# Kairos: Bootable A9 RTOS from Scratch
 
 The ARM Cortex-A9 is a relatively common microprocessor and shows up a lot as the integrated processor on smaller/older FPGA SOC's (think lower end Zynq boards, Cyclone V, etc). It's cheap, does microprocessor things reasonably well, has lots of support for interfacing with FPGA's as you'd expect, and tends to come in a nicely square-shaped package. It was also used in really old smartphones back in the day (the iPhone 4s A5 chip used two A9 cores, similar to the Cyclone V). The A9 was never designed to do real-time work though, which is ironic given its prevalence in FPGA SOC's. If one wants to do real-time work on the A9 they basically have three main solutions that can run (mostly) out of the box: 
 
@@ -285,3 +285,14 @@ _cpu1_fork:
 
 
 In the above C code, CP0 first signals to CPU1 that it's ready for CPU1 to run its startup routine, which sets TTB pointers, GIC, timers, and PMU like in `cpu0_startup`. It then waits for the completion signal. To save power, the wait/signal mechanism makes use of the `wfe` and `sev` instructions in conjunction with a shared mailbox to avoid breakout on the wrong event. CP0 initializes the scheduler when CPU1 has finished its startup routine. At this time, CPU1 may or may not be in its mainloop. The mainloop is empty and it's expected that when CPU1 executes tasks it does so by way of the scheduler. CPU0's mainloop is expected to contain the relevant application code and may assign tasks to CPU1 as needed. Any task running on CPU1 can also assign more tasks to the processor if desired. 
+
+
+
+
+## Allocator
+
+Kairos includes a Two-Level Segregated Fit (TLSF) allocator. The general idea is to divide free memory into a fixed number of size classes. When an allocation is requested, its size is rounded up to the smallest class that can accommodate it. The allocator then finds a free block belonging to that class or a larger one and carves out the requested memory. Any remaining memory is returned to the appropriate size class, where each block is guaranteed to be at least as large as its class's lower bound, but strictly smaller than the next class's lower bound.
+
+The allocator is initialized with the entire heap represented as a single free block in the largest size class. To satisfy an allocation, it searches for an available block in the requested class or any larger class. Since there are at most C size classes, where C is constant, and splitting a block takes O(1) time, allocation is bounded by O(1) time.
+
+The diagram below illustrates this process.
