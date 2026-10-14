@@ -26,11 +26,21 @@ IRQ_SAMPLES   = 1024
 MUTEX_SAMPLES = 1024
 MEMLAT_SAMPLES = 8192     # matches workload_micro.c (bumped to catch SDRAM's spread)
 ALLOC_METRICS = 7
-TRACE_TICKS   = 2400      # g_sched_trace capacity (must match workload_edf.c)
+TRACE_TICKS   = 7200      # g_sched_trace capacity (must match workload_edf.c)
 GANTT_WINDOW  = 720       # ticks shown in the Gantt (>1 hyperperiod)
 COMFORTABLE_U = 700       # always plot this under-capacity trial as a baseline
 SUSP_TICKS    = 64        # suspend-test per-scenario run-tick capture depth (must match workload_suspend.c)
 SUSP_SLACK    = 3         # ticks of scheduling slack allowed on a measured suspension delay
+
+# persistent-thread test (must match workload_persistent.c)
+PP_NPERIODIC  = 6         # tight periodic taskset, auto-balanced
+PP_NPERSIST   = 5         # persistent threads: 3 HIGH + 1 MED + 1 LOW
+PP_HI_IDS     = (10, 11, 12)   # same-priority level -> round-robin among these
+PP_MED_ID     = 20             # below HIGH -> must starve while any HIGH is alive
+PP_LOW_ID     = 30             # below MED  -> must starve
+PP_SLICE      = 200       # PERSISTENT_SLICE_TICKS: a persistent thread's run-tick quantum
+PP_SECONDS    = 8.0       # measurement window (> TRACE_TICKS ticks, so the trace fills)
+PP_IDLE_ID    = 0xFF      # IDLE_ID: scheduler idle in the trace
 
 
 # --- target ABI -------------------------------------------------------------
@@ -1186,6 +1196,229 @@ def suspend_test(ocd: OCD, symbols: dict[str, int]) -> SuspendResult:
     return res
 
 
+def _trace_counts(trace: bytes) -> dict[int, int]:
+    # run-ticks per id in a core's schedule trace (how many ticks each id ran).
+    counts: dict[int, int] = {}
+    for b in trace:
+        counts[b] = counts.get(b, 0) + 1
+    return counts
+
+
+@dataclass(frozen=True)
+class PersistResult:
+    periodic_assign:  tuple[int, ...]   # periodic id -> core the balancer chose
+    periodic_periods: tuple[int, ...]   # periodic id -> period (ticks)
+    periodic_done:    tuple[int, ...]   # periodic id -> completions in the window
+    persist_ids:      tuple[int, ...]   # persistent trace ids (HIGH..LOW)
+    persist_prio:     tuple[int, ...]   # persistent id -> priority level (2=HIGH,1=MED,0=LOW)
+    persist_assign:   tuple[int, ...]   # persistent id -> core the balancer chose
+    core_u:           tuple[float, ...] # per-core empirical utilization
+    misses:           tuple[int, ...]   # per-core missed deadlines
+    traces:           tuple[bytes, ...] # per-core schedule trace (ids; 0xFF = idle)
+
+
+def persistent_test(ocd: OCD, symbols: dict[str, int], num_cpus: int) -> PersistResult:
+    bp_ready = symbols["ktrace_bp_persist_ready"]
+    bp_done  = symbols["ktrace_bp_persist_done"]
+    bp_fault = symbols["fault_trap"]
+
+    # Firmware is parked on bp_suspend_done. Free the breakpoints behind us (the
+    # one we're on, and micro's) to stay under the Cortex-A9 6-HW cap, then arm
+    # persist ready/done.
+    for name in ("ktrace_bp_suspend_done", "ktrace_bp_micro_done"):
+        if symbols.get(name):
+            ocd.remove_hw_breakpoint(symbols[name])
+    ocd.add_hw_breakpoint(bp_ready)
+    ocd.add_hw_breakpoint(bp_done)
+
+    # Step into persistent_run: it builds the periodic set (auto-balanced) and the
+    # persistent set, records each thread's assigned core, then stops at bp_ready
+    # with interrupts still off -- nothing has run, so the assignment is final.
+    ocd.continue_from_breakpoint()
+    ocd.expect_breakpoint(bp_ready, timeout=20.0)
+
+    periodic_assign  = tuple(ocd.read_words(symbols["g_pp_periodic_assign"], PP_NPERIODIC))
+    periodic_periods = tuple(ocd.read_words(symbols["g_pp_periods"], PP_NPERIODIC))
+    persist_ids      = tuple(ocd.read_words(symbols["g_pp_persist_ids"], PP_NPERSIST))
+    persist_prio     = tuple(ocd.read_words(symbols["g_pp_persist_prio"], PP_NPERSIST))
+    persist_assign   = tuple(ocd.read_words(symbols["g_pp_persist_assign"], PP_NPERSIST))
+
+    # Run both cores for the measurement window.
+    ocd.continue_from_breakpoint()
+    time.sleep(PP_SECONDS)
+    ocd.halt()
+
+    if ocd.read_fault():
+        raise RuntimeError(ocd.diagnose())
+
+    core_u        = tuple(v / 65536.0 for v in ocd.read_words(symbols["g_core_u_m"], num_cpus))
+    misses        = tuple(ocd.read_words(symbols["g_misses_m"], num_cpus))
+    periodic_done = tuple(ocd.read_words(symbols["g_pp_periodic_done"], PP_NPERIODIC))
+
+    traces: list[bytes] = []
+    for c in range(num_cpus):
+        n = min(ocd.read_u32(symbols["g_trace_len"] + 4 * c), TRACE_TICKS)
+        traces.append(ocd.read_bytes(symbols["g_sched_trace"] + TRACE_TICKS * c, n) if n else b"")
+
+    # Release the window; firmware kills its threads, tears down, stops at done.
+    ocd.write_u32(symbols["g_test_release"], 1)
+    ocd.resume()
+    ocd.expect_breakpoint(bp_done, timeout=30.0)
+
+    res = PersistResult(periodic_assign, periodic_periods, periodic_done,
+                        persist_ids, persist_prio, persist_assign, core_u, misses, tuple(traces))
+
+    # --- report -------------------------------------------------------------
+    counts = [_trace_counts(t) for t in traces]
+    level  = {2: "HIGH", 1: "MED", 0: "LOW"}
+    percore_counts = [sum(1 for i in range(PP_NPERSIST) if persist_assign[i] == c) for c in range(num_cpus)]
+
+    def run_ticks_of(i: int) -> int:
+        c = persist_assign[i]
+        return counts[c].get(persist_ids[i], 0) if c < len(counts) else 0
+
+    print("\npersistent threads:")
+    print("  periodic (hard EDF, auto-balanced):")
+    for i in range(PP_NPERIODIC):
+        print(f"    id={i} (T={periodic_periods[i]}) -> CPU{periodic_assign[i]}  done={periodic_done[i]}")
+    print("  " + "  ".join(f"U(CPU{c})={core_u[c]:.3f} misses={misses[c]}" for c in range(num_cpus)))
+    print("  persistent (round-robin best-effort):")
+    for i in range(PP_NPERSIST):
+        print(f"    id={persist_ids[i]} {level.get(persist_prio[i], '?'):4s} -> CPU{persist_assign[i]}  run_ticks={run_ticks_of(i)}")
+    for c in range(num_cpus):
+        total = sum(counts[c].values()) or 1
+        idle  = counts[c].get(PP_IDLE_ID, 0)
+        print(f"  CPU{c} idle = {idle}/{total} ticks ({100.0*idle/total:.1f}%)")
+    # least_loaded_core alternates on ties, so un-started (u=0) persistent threads
+    # SPREAD across cores rather than piling -- report the actual split.
+    print(f"  balancer spread persistent across cores: {percore_counts} (per CPU)")
+
+    # --- checks (non-fatal: always emit figures; print warnings on anomalies) --
+    warns: list[str] = []
+
+    # 1. periodic always wins: no missed deadlines, every periodic task ran.
+    for c in range(num_cpus):
+        if misses[c] != 0:
+            warns.append(f"periodic: CPU{c} missed {misses[c]} deadlines (persistent stole hard-task time)")
+    for i in range(PP_NPERIODIC):
+        if periodic_done[i] == 0:
+            warns.append(f"periodic: id={i} never completed a job in the window")
+
+    # 2. strict priority is PER CORE: a persistent thread may run only if no higher-
+    #    priority persistent thread shares its core.
+    for i in range(PP_NPERSIST):
+        c, prio = persist_assign[i], persist_prio[i]
+        higher_here = any(persist_assign[j] == c and persist_prio[j] > prio for j in range(PP_NPERSIST))
+        if higher_here and run_ticks_of(i) != 0:
+            warns.append(f"strict priority: id={persist_ids[i]} ({level.get(prio,'?')}) ran "
+                         f"{run_ticks_of(i)} ticks on CPU{c} under a higher-priority thread (should be 0)")
+
+    # 3. round-robin fairness is PER (core, level): several same-priority threads
+    #    sharing one core should split that core's slack evenly. The global HIGH
+    #    share need NOT be even -- the balancer may split a level unevenly across
+    #    cores (e.g. 2/1), and a level's lone thread on a core gets all its slack.
+    groups: dict[tuple[int, int], list[int]] = {}
+    for i in range(PP_NPERSIST):
+        groups.setdefault((persist_assign[i], persist_prio[i]), []).append(i)
+    for (c, prio), idxs in groups.items():
+        if len(idxs) > 1:
+            rts = [run_ticks_of(i) for i in idxs]
+            if any(r == 0 for r in rts):
+                warns.append(f"round-robin: starved thread in CPU{c} {level.get(prio,'?')} level (run_ticks={rts})")
+            elif max(rts) - min(rts) > 2 * PP_SLICE:
+                warns.append(f"round-robin: uneven share in CPU{c} {level.get(prio,'?')} level, "
+                             f"spread={max(rts)-min(rts)} > {2*PP_SLICE} (run_ticks={rts})")
+
+    # 4. fill: a core hosting any persistent thread should soak nearly all its slack.
+    for c in range(num_cpus):
+        has_persist = any(persist_assign[i] == c for i in range(PP_NPERSIST))
+        idle_frac   = counts[c].get(PP_IDLE_ID, 0) / (sum(counts[c].values()) or 1)
+        if has_persist and idle_frac > 0.02:
+            warns.append(f"fill: CPU{c} hosts persistent threads but idled {idle_frac:.2f} of the window")
+
+    if warns:
+        print("  WARNINGS (test still passes; see figures):")
+        for w in warns:
+            print("    " + w)
+    else:
+        print("  all checks passed")
+
+    return res
+
+
+def plot_persistent(res: PersistResult, path: Path, num_cpus: int,
+                    window: int = TRACE_TICKS) -> None:
+    # One Gantt per core: periodic rows (balanced to this core) on top, then the
+    # persistent rows the balancer put here, labelled by priority level. Shows
+    # periodic preempting, persistent round-robin in the slack, and MED/LOW starved.
+    colors = {2: "#1f77b4", 1: "#ff7f0e", 0: "#2ca02c"}   # HIGH / MED / LOW
+    pcolor = "#7f7f7f"
+    level  = {2: "HIGH", 1: "MED", 0: "LOW"}
+    fig, axes = plt.subplots(num_cpus, 1, figsize=(16, 3.4 * num_cpus), squeeze=False)
+
+    for c in range(num_cpus):
+        ax = axes[c][0]
+        periodic_here   = [i for i in range(PP_NPERIODIC) if res.periodic_assign[i] == c]
+        persist_here    = [i for i in range(PP_NPERSIST) if res.persist_assign[i] == c]
+        rows: list[tuple[str, int, str]] = []   # (label, trace-id, color)
+        for i in periodic_here:
+            rows.append((f"periodic id={i} (T={res.periodic_periods[i]})", i, pcolor))
+        for i in persist_here:
+            tid = res.persist_ids[i]
+            rows.append((f"{level.get(res.persist_prio[i], '?')} id={tid}", tid,
+                         colors.get(res.persist_prio[i], "#000000")))
+
+        trace = res.traces[c] if c < len(res.traces) else b""
+        n = min(len(trace), window)
+        nr = len(rows)
+        for row, (_, tid, color) in enumerate(rows):
+            y = nr - 1 - row
+            segs, t = [], 0
+            while t < n:
+                if trace[t] == tid:
+                    s = t
+                    while t < n and trace[t] == tid:
+                        t += 1
+                    segs.append((s, t - s))
+                else:
+                    t += 1
+            ax.broken_barh(segs, (y + 0.15, 0.7), facecolors=color)
+        ax.set_yticks([nr - 1 - row + 0.5 for row in range(nr)])
+        ax.set_yticklabels([lbl for lbl, _, _ in rows], fontsize=8)
+        ax.set_ylim(0, max(nr, 1))
+        ax.set_xlim(0, max(n, 1))
+        ax.set_xlabel("time (ticks)")
+        idle = _trace_counts(trace).get(PP_IDLE_ID, 0)
+        ax.set_title(f"CPU{c}  (U={res.core_u[c]:.3f}, misses={res.misses[c]}, "
+                     f"idle={100.0*idle/(n or 1):.1f}%; first {n} ticks)")
+        ax.grid(axis="x", alpha=0.3)
+    fig.suptitle("Persistent threads under tight EDF: periodic preempts, persistent round-robins the slack",
+                 fontsize=12)
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
+
+
+def write_persistent_csv(path: Path, res: PersistResult, num_cpus: int) -> None:
+    counts = [_trace_counts(t) for t in res.traces]
+    with path.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["kind", "id", "priority", "period", "core", "run_ticks", "done"])
+        for i in range(PP_NPERIODIC):
+            w.writerow(["periodic", i, "", res.periodic_periods[i], res.periodic_assign[i],
+                        counts[res.periodic_assign[i]].get(i, 0), res.periodic_done[i]])
+        level = {2: "HIGH", 1: "MED", 0: "LOW"}
+        for i in range(PP_NPERSIST):
+            tid = res.persist_ids[i]
+            w.writerow(["persistent", tid, level.get(res.persist_prio[i], "?"), PP_SLICE,
+                        res.persist_assign[i], counts[res.persist_assign[i]].get(tid, 0), ""])
+        w.writerow([])
+        for c in range(num_cpus):
+            total = sum(counts[c].values()) or 1
+            w.writerow([f"CPU{c}_util", round(res.core_u[c], 4), f"misses={res.misses[c]}",
+                        f"idle_pct={round(100.0*counts[c].get(PP_IDLE_ID,0)/total,1)}"])
+
+
 def write_artifacts(outdir: Path, alloc_metrics: list[Metric], edf_results: list[EDFResult],
                     traces: dict[int, bytes], periods: tuple[int, ...],
                     cpu1_traces: dict[int, bytes] | None = None,
@@ -1269,7 +1502,10 @@ def main(bootable: bool = False) -> None:
         "g_susp_self_requested_delay", "g_susp_self_delay", "g_susp_self_resumed",
         "g_susp_self_regs_ok", "g_susp_self_ticks", "g_susp_self_n",
         "g_susp_other_requested_delay", "g_susp_other_suspend_tick", "g_susp_other_last_pre",
-        "g_susp_other_first_post", "g_susp_other_ticks", "g_susp_other_n"))
+        "g_susp_other_first_post", "g_susp_other_ticks", "g_susp_other_n",
+        "ktrace_bp_persist_ready", "ktrace_bp_persist_done",
+        "g_pp_periods", "g_pp_periodic_assign", "g_pp_periodic_done",
+        "g_pp_persist_ids", "g_pp_persist_prio", "g_pp_persist_assign"))
     if bootable:
         require_symbols(symbols, ("g_boot_release",))
 
@@ -1280,6 +1516,7 @@ def main(bootable: bool = False) -> None:
     balance: BalanceResult | None = None
     micro: MicroResult | None = None
     suspend: SuspendResult | None = None
+    persist: PersistResult | None = None
 
     outdir = RESULTS_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1327,6 +1564,7 @@ def main(bootable: bool = False) -> None:
             balance = balance_test(ocd, symbols, num_cpus)
             micro = micro_test(ocd, symbols)
             suspend = suspend_test(ocd, symbols)
+            persist = persistent_test(ocd, symbols, num_cpus)
         except KeyboardInterrupt:
             # Ctrl-C usually means the run hung -- dump where both cores are stuck
             # (+ any fault record) before the socket closes. fault_addr/num_cpus are
@@ -1373,6 +1611,9 @@ def main(bootable: bool = False) -> None:
                                 ["other_first_post", suspend.other_first_post],
                                 ["other_gap", suspend.other_gap]])
         plot_suspend(suspend, outdir / "suspend.png")
+    if persist is not None:
+        write_persistent_csv(outdir / "persistent.csv", persist, num_cpus)
+        plot_persistent(persist, outdir / "persistent.png", num_cpus)
     print(f"\nPASS   artifacts in {outdir}")
 
 

@@ -11,7 +11,7 @@
 #define NTASKS       3u
 #define CALIB_ITERS  200000u
 
-#define TRACE_TICKS  2400u          /* per-tick schedule-trace window for the host Gantt; 4 hyperperiods (lcm(40,60,100)=600) */
+#define TRACE_TICKS  7200u          /* per-tick schedule-trace window for the host Gantt; 12 hyperperiods (lcm(40,60,100)=600), also sized so the persistent test captures several round-robin rounds under tight periodic load */
 
 #define ARRAY_LEN(a) \
     (sizeof(a) / sizeof((a)[0]))
@@ -60,7 +60,7 @@ HOST_SHARED volatile uint32_t g_edf_done[NTASKS];
 HOST_SHARED volatile uint8_t  g_sched_trace[NUM_CPUS][TRACE_TICKS];
 HOST_SHARED volatile uint32_t g_trace_len[NUM_CPUS];
 
-static uint32_t trace_active;   /* 1 while a trial is running (every trial is traced) */
+uint32_t trace_active;   /* 1 while a trial is running (every trial is traced); shared with workload_persistent.c */
 static uint32_t iters[NTASKS];
 
 

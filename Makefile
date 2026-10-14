@@ -58,6 +58,7 @@ CORE := \
 	bench/workload_matmul.c \
 	bench/workload_micro.c \
 	bench/workload_suspend.c \
+	bench/workload_persistent.c \
 	kernel/mutex.s \
 
 

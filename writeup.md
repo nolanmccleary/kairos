@@ -25,13 +25,16 @@ We will assume the following basic operational behaviour is expected:
 
 Since we're running on a real chip we need to make sure all the hardware is initialized properly at the right times. Some of the hardware is A9-specific (GIC, L1 caches). Other stuff is Cyclone-V specific (L2 cache, SDRAM PHY). If you don't know what these are don't worry about it they will be discussed in more detail later on. The point is we need to separate the board-specific functionality so that we can port to other systems more easily in the future. This is the point of something like a board support package (BSP). Our BSP will be very minimal. It's only role will be to set up the standard Cyclone V hardware components that are shared by both cores and useful for generic system operation. The rest of the hardware initialization can be carried out by the kernel. 
 
+### Disclaimer
+This document assumes a reasonable degree of fluency with basic systems programming and computer science concepts. If basic data structures or computer architecture concepts are not yet intuitive there are tons of guides online that do a really good job at explaining them. The purpose of this guide is not "explain what an interrupt is", but rather "explain how one uses things like hardware signals, data structures, and a known initial system state to build the low-level machinery that most users take for granted when running a program". There is a lot to cover so I will try my best to focus on the most non-trivial stuff possible while leaving things like "did u know u can control piece of hardware by writing to register" as an exercise to the reader.
+
 ## Types of Memory and Fused Kernel-Preloaders
 
-All A9's have something called On-Chip RAM (OCRAM). It's exactly what you'd expect and is 64KB on the Cyclone V. A9's also have an interface for Synchronous Dynamic RAM (SDRAM). The SDRAM lives off-chip and its implementation is up to the SOC manufacturer because memory requirements may change with the intended application. Lastly, the A9 has a special piece of memory called Boot ROM. The purpose of Boot ROM is to read data from something like an SD card and copy it into OCRAM. Then something like a preloader runs from OCRAM, initializes the SDRAM hardware, and copies the rest of the code into the SD card. Normally the kernel would be separate from the preloader and live alongside the application code in SDRAM but there's no reason why this is strictly necessary. This means we could in theory keep small kernels in OCRAM such that the distinction between preloader and kernel effectively becomes meaningless. Since OCRAM is faster this could generally be seen as preferable, especially when extremely strict real-time requirements necessitate that caches not be used. It's also good for real-time performance, since SRAM access latency is far more deterministic than DRAM access latency, due to not having to interface with the DDR controller. We could also move application code into OCRAM as well if it's small enough though we do not necessarily expect that it is. 
+All A9's have something called On-Chip RAM (OCRAM). It's exactly what you'd expect and is 64KB on the Cyclone V. A9's also have an interface for Synchronous Dynamic RAM (SDRAM). The SDRAM lives off-chip and its implementation is up to the SOC manufacturer because memory requirements may change with the intended application. Lastly, the A9 has a special piece of memory called Boot ROM. The purpose of Boot ROM is to read data from something like an SD card and copy it into OCRAM. Then something like a preloader runs from OCRAM, initializes the SDRAM hardware, and copies the rest of the code into SDRAM. Normally the kernel would be separate from the preloader and live alongside the application code in SDRAM but there's no reason why this is strictly necessary. This means we could in theory keep small kernels in OCRAM such that the distinction between preloader and kernel effectively becomes meaningless. Since OCRAM is faster this could generally be seen as preferable, especially when extremely strict real-time requirements necessitate that caches not be used. It's also good for real-time performance, since SRAM read latency is far more deterministic than DRAM read latency, due to not having to wait for the DDR controller to give you your bits. We could also move application code into OCRAM as well if it's small enough though we do not necessarily expect that it is and so far it's been fairly restrictive to do so. This means that at the moment we will keep all appcode in SDRAM.
 
-This is all to say we can combine the kernel with what would normally be considered a preloader and run it in OCRAM to make it slightly faster especially when the caches are turned off. To put it into perspective, here's a speed comparison:
+This is all to say we can combine the kernel with what would normally be considered a preloader and run it in OCRAM to slightly improve speed/determinism, especially when the caches are turned off. To put it into perspective, here's a speed comparison:
 
-![Uncached memory-access latency: SDRAM vs OCRAM, reads and writes (cycles)](figures/memlat.png)
+![Uncached memory-access latency: SDRAM vs OCRAM, reads and writes (cycles)](figures/memlat_latency.png)
 
 
 ## A9 Hardware
@@ -40,10 +43,22 @@ As alluded to earlier, we are using a real A9 on a real SOC and so we have to wo
 
 ![The A9-based Cyclone V hardware](figures/a9_fig2.webp)
 
-Not pictured here is the Snoop Control Unit (SCU) which is used to manage cache coherence between both core's L1 caches and the MMU whcih is used for physical to virtual address translation and required for engaging the L1 data cache. 
+Not pictured here is the Snoop Control Unit (SCU) which is used to manage cache coherence between both core's L1 caches and the MMU which is used for physical to virtual address translation and required for engaging the L1 data cache. 
 
 
-## Boot Seqeuence
+## Important specific numbers
+
+Here are some specific numbers which may be important in certain contexts:
+
+- Stack Size: 8192 bytes per thread (`THREAD_STACK_SIZE = 0x2000`, embedded in each `thread_t`)
+- Heap Size: 16777216 bytes (`_heap_size = 0x01000000`, carved out of SDRAM)
+- Gtimer ISR Frequency (scheduler tick resolution): ~1 kHz, i.e. ~1 ms per tick. `GTIMER_AUTOINC = 199999` fires one IRQ every 200000 global-timer increments; at the MPU peripheral clock (~200 MHz, the MPU clock divided down) that lands near 1 kHz.
+- L1 I-Cache Size: 32768 bytes (32 KiB, 4-way set-associative)
+- L1 D-Cache Size: 32768 bytes (32 KiB, 4-way set-associative, 32-byte lines)
+
+
+
+## Boot Sequence
 
 We will now do an overview of how the system boots. 
 
@@ -295,4 +310,70 @@ Kairos includes a Two-Level Segregated Fit (TLSF) allocator. The general idea is
 
 The allocator is initialized with the entire heap represented as a single free block in the largest size class. To satisfy an allocation, it searches for an available block in the requested class or any larger class. Since there are at most C size classes, where C is constant, and splitting a block takes O(1) time, allocation is bounded by O(1) time.
 
-The diagram below illustrates this process.
+The diagram below illustrates this process:
+
+![TLSF Structure](figures/tlsf_fig1.png)
+
+
+In more detail: We have two levels of granularity - buckets, which progress as powers of 2, and bins, which split buckets evenly into 32 different size classes. We have one bitmap to encode all free buckets and an array of bitmaps to encode which bins inside that bucket are free. If any bin is free inside that bucket that bucket's respective map bit is set. Finding the first available bucket is very efficient as all we need to do is find the position of the leading one. From there we calculate the excess and find the first bin inside that bucket that could fit our target block. We then search all bins and buckets after and including this minimum in order to find the first available block of free memory. Once we allocate this free block we re-map the remainder to the first bucket-bin pair that it is larger than and set the relevant bits if no free block previously existed at that location. At the same time we clear the old bucket and bin bits if the old free block was the only free one for that size. We keep track of the free blocks for each size class using doubly linked list. Given m buckets and n bins this results in a maximum of mxn active free lists at a given time. Each free node needs a minimum of 16 bytes of space: 4 to store the size, 4 to store the logical predecessor, 4 to store the logical successor, and 4 to store the previous physical block address. Storing the previous physical block address is necessary to enable the following to take place: suppose a block of size k is freed and was located in front of another free block of size s; we want to be able to remove the s-sized free list entry and make a new (k+s) sized free list entry but we need the physical address of the previous block in order to check 'behind' to see if it is free. We would also want to coalesce any free blocks directly in front of our target if needed but we can get there for free because we know the size. Given every free block needs to be 16 bytes at a minimum that means the minimum size for an allocated block must also be 16 bytes wherein the size and previous physical address are held in the first 8 bytes followed by a minimum payload of 8 bytes, the first 8 of which get converted to the next/prev pointers when the block is freed.  
+
+
+To put the performance advantages of TLSF into context, we compare how allocation time scales with payload size for TLSF vs something like a simple free-list allocator:
+
+
+*TODO: @CLAUDE Generate comparison chart here, make a dummy freelist allocator and include switch in. We should have a new test that compares tslf vs freelist allocator curves. this may require two new build options. we will do this on a spearate branch and only merge in the final generated figure*
+
+
+
+
+## Scheduler
+
+Kairos uses a hybrid Earliest Deadline First (EDF) Round-Robin (RR) Scheduler. Tasks with real-time mandates go through the EDF pathway which always has priority over the RR pathway. To accomplish that we use two minheaps: the first manages released tasks by minimum deadline. The second manages unreleased tasks by minimum release time. If the global tick value for a given core is past the tasks release time, that task is considered released and runnable. This allows us to decompose each scheduler interrupt into the following steps:
+
+1. We set a global (shared) timer during the board init. This timer has a comparator that periodically fires an IRQ signal and sets a specific register with an interrupt code. Upon IRQ signal reception provided all relevant GIC machinery is primed to accept it the A9 will move PC to a specific offset from the VBAR. Our _irq_handler lives here. We check that IRQ code matches gtimer code. If it does, then this is scheduler preemption and we invoke the appropriate routine. 
+
+2. The scheduler routine runs from IRQ mode (`0X12`) while our task code runs in SYS mode (`0x1F`). This means that `spsr` and `lr` have the last SYS mode CPSR and PC values respectively before pre-emption occurred. We can use the `srsfd` command operating on system mode identifier `0x1F` to push the last SYS mode cpsr and pc onto the sys mode stack from IRQ mode. r0-r12 are shared across states, r13 and r14 which represent sp and lr respectively are banked. This means we need to switch to system mode before pushing anything else to the stack so we increment the right sp and we need to push r0-r12 immediately before running any interrupt code so our register state doesn't get clobbered. Note that all ARM exceptions add a fixed offset to the exception mode's lr. IRQ adds a +4 offset so that needs to be negated before we can recover the sys mode pc. 
+
+```
+    sub lr, lr, #4 @; get lr_irq i.e. get the last pre-interrupt PC value
+    srsfd sp!, #0x1f @; Store Return State Full Descending --- push cpsr then pc (cached spsr then lr_irq in this case) onto sysmode stack (specified by 0x1f), sp autodecs
+    
+    cps #0x1f @; Change Processor State --- switch to system mode
+
+    push {r0-r12} @; store the FULL integer register file. A context switch resumes a
+                  @; DIFFERENT task, so r4-r11 (callee-saved, live across the interrupted
+                  @; task's calls) must be part of the saved context -- saving only the
+                  @; AAPCS caller-saved set corrupts a resumed task's r4-r11.
+
+    push {lr} @; push lr_sys onto sysmode stack
+
+    
+    cps #0x12
+```
+
+
+3. Check FIFO for any tasks that haven't been added to the scheduling pool. If the task is RT release it immediately and add it to the deadline heap. If it's not RT add it to the appropriate RR-FIFO based on priority.
+
+4. Check the release heap to see if any tasks are releasable. We will always see them the first cycle they become releasable because the ticker increments via the scheduler routine. When releasable pop fron RelHeap, set deadheap to release time (current ticks) + period, and add to deadline heap. 
+
+5. Pop first runnable task from deadline heap. This task is guaranteed to have the earliest deadline. If task is finished and aperiodic, remove it from the heap and add it to the outgoing_threads fifo. If it's finished and periodic increment its release time by 1 period and move it to RelHeap if that release time hasn't been passed yet or DeadHeap if it has. 
+
+6. If deadheap is empty, all tasks are finished and not running again, or nothing is released yet, check the high priority fifo, then the medium priority, then the low priority one. Choose the highest priority task possible. If the same persistent task has been chosen over the other of the same priority for the same number of ticks as its period, rotate it to the back of its fifo and see if the next task is runnable. If a task is no longer runnable remove it. Repeat this process until a runnable persistent task is found or all tasks have been removed. 
+
+7. If no task has been found by this point set the current system sp to that processor's main sp. 
+
+8. Switch back to SYS mode and pop from sp: first restore lr and r0-r12. Then call `rfefd sp!` to restore pc and cpsr. At this point the context switch has completed.
+
+Not mentioned above was the appropriate servicing of the GIC machinery to a. re-enable irq's when desired and b. re-enable interrupts from the gtimer source.
+
+The tick comes from the A9 global timer. At board init (`cpu0_timer_start`) we stop the timer (`GTIMER_CTRL = 0`), clear any stale event (`GTIMER_ISR = 1`), set the auto-increment reload to `GTIMER_AUTOINC = 199999`, point the comparator one period ahead (`GTIMER_CMPL/CMPH = current count + 200000`), then write `GTIMER_CTRL = 0b1111`. The four control bits are, from the bottom: timer enable, comparator enable, IRQ enable, auto-increment. CPU1 (`cpu1_timer_start`) sets the same bits *except* the timer-enable bit — the counter is global and already running, so each core only needs its own comparator and IRQ enabled. Auto-increment is what makes re-arming free: when the comparator matches, the hardware advances it by `AUTOINC + 1` on its own, so the ISR never has to reprogram `GTIMER_CMP`.
+
+Acknowledging a tick is therefore two levels. The asm `_irq_handler` first calls `_identify_and_clear_source`, which reads `GICC_IAR` (this acknowledges the interrupt at the GIC and returns its ID) and writes it straight back to `GICC_EOIR` (end-of-interrupt, which drops the running priority so the next tick is allowed to preempt). The ID is handed to `c_irq_handler`; for the gtimer source it writes `GTIMER_ISR = 1` to clear the event flag at the timer itself, then calls `next_thread()`. So the GIC side is serviced in `_identify_and_clear_source` and the timer side in `c_irq_handler`, and the comparator re-arms itself.
+
+
+
+### PMU
+
+
+
+

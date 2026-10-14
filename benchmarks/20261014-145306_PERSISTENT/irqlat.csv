@@ -1,0 +1,2 @@
+distribution,count,min,mean,p50,p99,max,unit
+irq_dispatch,1024,161,166.1,166,173,232,cycles

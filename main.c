@@ -26,6 +26,7 @@ void edf_run(void);
 void edf_balance_run(void);
 void micro_run(void);
 void suspend_run(void);
+void persistent_run(void);
 
 void main(void)
 {
@@ -44,6 +45,7 @@ void main(void)
     edf_balance_run();
     micro_run();
     suspend_run();
+    persistent_run();
 #endif
 
     for (;;) { }

@@ -13,7 +13,7 @@
 #define MAX_THREADS 100
 #define IDLE_ID     0xFFu   /* main_thread's id -- marks idle ticks in the schedule trace */
 
-#define PERSISTENT_SLICE_TICKS 20000
+#define PERSISTENT_SLICE_TICKS 200
 
 
 
