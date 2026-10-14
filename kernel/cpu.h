@@ -33,6 +33,10 @@ typedef struct
     //Sched specific
     heap_t* deadHeap;
     heap_t* relHeap;
+    thread_fifo_t* lowFifo;
+    thread_fifo_t* medFifo;
+    thread_fifo_t* highFifo;
+
     thread_t* curr_thread;
     thread_t* main_thread;
     mutex_t thread_mutex;

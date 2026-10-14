@@ -41,8 +41,8 @@ static inline void percolate_up(heap_t* heap, int index)
         heap->heap[index] = heap->heap[parent_index];
         heap->heap[parent_index] = tmp;
 
-        heap->heap[index].thread->heap_index = index;
-        heap->heap[parent_index].thread->heap_index = parent_index;
+        heap->heap[index].thread->md.heap_index = index;
+        heap->heap[parent_index].thread->md.heap_index = parent_index;
 
         return percolate_up(heap, parent_index);
     }       
@@ -77,8 +77,8 @@ static inline void percolate_down(heap_t* heap, int index)
         heap->heap[index] = min_order_node;
         heap->heap[right_child_index] = tmp;
 
-        heap->heap[index].thread->heap_index = index;
-        heap->heap[right_child_index].thread->heap_index = right_child_index;
+        heap->heap[index].thread->md.heap_index = index;
+        heap->heap[right_child_index].thread->md.heap_index = right_child_index;
 
         return percolate_down(heap, right_child_index);
     }
@@ -89,8 +89,8 @@ static inline void percolate_down(heap_t* heap, int index)
         heap->heap[index] = min_order_node;
         heap->heap[left_child_index] = tmp;
 
-        heap->heap[index].thread->heap_index = index;
-        heap->heap[left_child_index].thread->heap_index = left_child_index;
+        heap->heap[index].thread->md.heap_index = index;
+        heap->heap[left_child_index].thread->md.heap_index = left_child_index;
 
         return percolate_down(heap, left_child_index);
     }
@@ -110,7 +110,7 @@ heap_op_e insert_node(heap_t* heap, thread_t* thread, uint32_t order)
         node.order = order;
 
         heap->heap[heap->curr_index] = node;
-        node.thread->heap_index = heap->curr_index;
+        node.thread->md.heap_index = heap->curr_index;
 
         percolate_up(heap, heap->curr_index++);
         return OP_OK;
@@ -125,7 +125,7 @@ heap_op_e remove_head(heap_t* heap)
     if (heap->curr_index > 0)
     {
         heap->heap[0] = heap->heap[--heap->curr_index];
-        heap->heap[0].thread->heap_index = 0;
+        heap->heap[0].thread->md.heap_index = 0;
 
         percolate_down(heap, 0);
         return OP_OK;
@@ -141,7 +141,7 @@ heap_op_e remove_node(heap_t* heap, size_t index)
     if (heap->curr_index > 0)
     {
         heap->heap[index] = heap->heap[--heap->curr_index];
-        heap->heap[index].thread->heap_index = index;
+        heap->heap[index].thread->md.heap_index = index;
 
         size_t parent_index = find_parent_index(index);
         if (heap->heap[index].order < heap->heap[parent_index].order) percolate_up(heap, index);

@@ -190,7 +190,7 @@ static void edf_flag_corruption(const char* msg, thread_t* t, cpu_core_e core,
 }
 
 
-/* Validate one live task against the values add_thread_to_core() stamped. Fields
+/* Validate one live task against the values add_periodic_thread_to_core() stamped. Fields
  * period/func/periodicity/core are set once and never change; thread_status must
  * stay a valid enum; sp must live inside the task's own stack. Any deviation ==
  * the struct got clobbered (freed + reused, stray write, etc.). */
@@ -199,13 +199,13 @@ static void edf_check_task(cpu_core_e core, uint32_t idx)
     thread_t* t = g_edf_handles[core][idx];
     if (t == NULL) return;
 
-    if (t->periodicity != PERIODIC)
+    if (t->md.periodicity != PERIODIC)
         edf_flag_corruption("edf watchdog: task periodicity corrupted",
-                            t, core, idx, (uint32_t)PERIODIC, (uint32_t)t->periodicity);
+                            t, core, idx, (uint32_t)PERIODIC, (uint32_t)t->md.periodicity);
 
-    if (t->period != g_edf_periods[idx])
+    if (t->timing.period != g_edf_periods[idx])
         edf_flag_corruption("edf watchdog: task period corrupted",
-                            t, core, idx, g_edf_periods[idx], t->period);
+                            t, core, idx, g_edf_periods[idx], t->timing.period);
 
     if (t->func != JOBS[idx])
         edf_flag_corruption("edf watchdog: task func corrupted",
@@ -215,9 +215,9 @@ static void edf_check_task(cpu_core_e core, uint32_t idx)
         edf_flag_corruption("edf watchdog: task core corrupted",
                             t, core, idx, (uint32_t)core, (uint32_t)t->core);
 
-    if (t->thread_status != PENDING && t->thread_status != RUNNING && t->thread_status != FINISHED)
+    if (t->md.status != PENDING && t->md.status != RUNNING && t->md.status != FINISHED)
         edf_flag_corruption("edf watchdog: task status corrupted",
-                            t, core, idx, 0u, (uint32_t)t->thread_status);
+                            t, core, idx, 0u, (uint32_t)t->md.status);
 
     if ((char*)t->sp < t->stack || (char*)t->sp > t->stack + THREAD_STACK_SIZE)
         edf_flag_corruption("edf watchdog: task sp outside its stack",
@@ -433,8 +433,8 @@ void edf_run(void)
          * push into CPU1's incoming FIFO safe against CPU1's own scheduler. */
         for (uint32_t i = 0; i < NTASKS; i++)
         {
-            g_edf_handles[CPU0][i] = add_thread_to_core(CPU0, JOBS[i], g_edf_periods[i], PERIODIC, i);
-            g_edf_handles[CPU1][i] = add_thread_to_core(CPU1, JOBS[i], g_edf_periods[i], PERIODIC, i);
+            g_edf_handles[CPU0][i] = add_periodic_thread_to_core(CPU0, JOBS[i], g_edf_periods[i], PERIODIC, i);
+            g_edf_handles[CPU1][i] = add_periodic_thread_to_core(CPU1, JOBS[i], g_edf_periods[i], PERIODIC, i);
         }
 
         g_edf_armed = 1u;   /* task set complete -- watchdog live from here */
@@ -518,9 +518,9 @@ void edf_run(void)
 
 /* -------------------------------------------------------------------------
  * Load-balance test: six equal u=0.25 periodic tasks (total 1.5) handed to the
- * balancer (add_thread), which should spread them to ~0.75 on each core. Self-
+ * balancer (add_periodic_thread), which should spread them to ~0.75 on each core. Self-
  * contained: brings the scheduler up, runs, kills its tasks, tears back down.
- * Tasks are labelled by id; add_thread's return tells us which core each landed on.
+ * Tasks are labelled by id; add_periodic_thread's return tells us which core each landed on.
  * ------------------------------------------------------------------------- */
 
 #define BAL_NTASKS   6u
@@ -579,7 +579,7 @@ void edf_balance_run(void)
 
     for (uint32_t i = 0; i < BAL_NTASKS; i++)
     {
-        handles[i] = add_thread(bal_job, g_bal_periods[i], PERIODIC, i);
+        handles[i] = add_periodic_thread(bal_job, g_bal_periods[i], PERIODIC, i);
         g_bal_assign[i] = (uint32_t)handles[i]->core;
     }
 

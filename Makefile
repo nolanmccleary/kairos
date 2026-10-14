@@ -84,7 +84,7 @@ BOOT_TEST     ?= 0
 CFLAGS := \
 	-mcpu=cortex-a9 \
 	-marm \
-	-O1 \
+	-Os \
 	-g \
 	-ffreestanding \
 	-nostdlib \

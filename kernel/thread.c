@@ -17,7 +17,7 @@ void switch_in(thread_t *thread)
 {
     uint32_t curr_cycles = pmu_cycles();
 
-    switch (thread->thread_status)
+    switch (thread->md.status)
     {
         case PENDING:
             uint32_t ti_curr = curr_cycles - thread->metrics.t0;
@@ -49,7 +49,7 @@ void switch_out(thread_t* thread)
     uint32_t curr_cyles = pmu_cycles();
     thread->metrics.delta_sum += curr_cyles - thread->metrics.prev_cycles; 
 
-    switch (thread->thread_status)
+    switch (thread->md.status)
     {
         case RUNNING:
             break;

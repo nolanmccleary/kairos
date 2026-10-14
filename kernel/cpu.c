@@ -32,7 +32,7 @@ void update_utilization(thread_t* thread)
 {
     cpu_core_e core = thread->core;
 
-    if (thread->metrics.ti_av > 0 && thread->periodicity == PERIODIC)
+    if (thread->metrics.ti_av > 0 && thread->md.periodicity == PERIODIC)
     {
         uint32_t u = (uint32_t)(((uint64_t)thread->metrics.ci_av << 16) / thread->metrics.ti_av);
         g_cpus[core].utilization -= thread->metrics.prev_u;

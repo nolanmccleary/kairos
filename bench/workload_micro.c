@@ -100,9 +100,9 @@ static void ctxsw_run(void)
     /* Short periods (ticks) so a task is released on ~half of all ticks -> switch
      * ticks accrue fast enough to fill the ring in seconds, not ~half a minute. */
     __asm__ __volatile__("cpsid i" ::: "memory");
-    h0 = add_thread_to_core(CPU0, ctx_job, 4u,  PERIODIC, 0u);
-    h1 = add_thread_to_core(CPU0, ctx_job, 6u,  PERIODIC, 1u);
-    h2 = add_thread_to_core(CPU0, ctx_job, 10u, PERIODIC, 2u);
+    h0 = add_periodic_thread_to_core(CPU0, ctx_job, 4u,  PERIODIC, 0u);
+    h1 = add_periodic_thread_to_core(CPU0, ctx_job, 6u,  PERIODIC, 1u);
+    h2 = add_periodic_thread_to_core(CPU0, ctx_job, 10u, PERIODIC, 2u);
     ctxsw_active = 1u;
     __asm__ __volatile__("dmb sy" ::: "memory");
     __asm__ __volatile__("cpsie i" ::: "memory");

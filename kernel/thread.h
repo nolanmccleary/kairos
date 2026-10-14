@@ -13,6 +13,8 @@
 #define MAX_THREADS 100
 #define IDLE_ID     0xFFu   /* main_thread's id -- marks idle ticks in the schedule trace */
 
+#define PERSISTENT_SLICE_TICKS 20000
+
 
 
 
@@ -37,7 +39,17 @@ typedef enum
 {
     APERIODIC,
     PERIODIC,
+    PERSISTENT,
 }   thread_periodicity_e;
+
+
+typedef enum 
+{
+    LOW_PRIORITY,
+    MED_PRIORITY,
+    HIGH_PRIORITY,
+}   persistent_thread_priority_e;
+
 
 
 typedef enum 
@@ -46,7 +58,30 @@ typedef enum
     OUTGOING_THREADS,
     DEAD_HEAP,
     REL_HEAP,
+    FIFO_LOW,
+    FIFO_MED,
+    FIFO_HIGH,
 }   thread_owner_e;
+
+
+typedef struct
+{
+    thread_status_e status;
+    thread_periodicity_e periodicity;
+    persistent_thread_priority_e priority;
+    thread_owner_e owner;
+    size_t heap_index;
+}   thread_metadata_t;
+
+
+typedef struct 
+{
+    uint32_t period;
+    uint32_t release_time;
+    uint32_t deadline;
+    bool dirty;
+}   thread_timing_t;
+
 
 
 typedef struct
@@ -72,22 +107,13 @@ typedef struct __attribute__((aligned(8))) //Stack should start 8-aligned
     char stack[THREAD_STACK_SIZE];
     char* sp;
 
-    thread_periodicity_e periodicity;
-    uint32_t period;
-
-    uint32_t release_time;
-    uint32_t deadline;
-
-    bool dirty;
-    thread_status_e thread_status;
+    thread_metadata_t md;
+    thread_timing_t timing;
+    metrics_t metrics;
 
     sys_exit_e (*func)();
 
-    metrics_t metrics;
-
     uint32_t id;
-    size_t heap_index;
-    thread_owner_e owner;
 
     cpu_core_e core;
 }   thread_t;
