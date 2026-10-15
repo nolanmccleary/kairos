@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Shared-axis latency range plot from a summary CSV (min/mean/p50/p99/max rows).
+"""Shared-axis latency range plot from a summary CSV (min/mean/median/p99/max rows).
 
 Matches the memlat figure's visual language: every distribution on ONE cycle
 axis, each drawn as min..max (thin, the tail) + min..p99 (thick, the bulk) with
-median, mean, and max markers. Good for the microbench CSVs (ctxsw, irqlat),
-which store summary stats rather than raw samples.
+median, mean, and max markers (each labelled with its value). Good for the
+microbench CSVs (ctxsw, irqlat), which store summary stats rather than raw samples.
 
 Usage: python3 scripts/plot_latency_ranges.py <in.csv> <out.png> "<title>"
 """
@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e"]
-STATS = ("min", "mean", "p50", "p99", "max")
+STATS = ("min", "mean", "p99", "max")
 
 
 def load(csv_path: Path):
@@ -28,8 +28,10 @@ def load(csv_path: Path):
             name = (r.get("distribution") or "").strip()
             if not name:
                 continue
+            median = r.get("median", r.get("p50"))   # accept older p50-headed CSVs
             try:
                 s = {k: float(r[k]) for k in STATS}
+                s["median"] = float(median)
             except (TypeError, ValueError):
                 # metadata rows (e.g. switch_fraction_p,0.3669) reuse the first two cols.
                 meta[name] = r.get("count")
@@ -53,14 +55,16 @@ def main() -> None:
         ax.plot([s["min"], s["max"]], [y, y], color=c, lw=1.2, alpha=0.45, zorder=1)
         ax.plot([s["min"], s["p99"]], [y, y], color=c, lw=8.0, alpha=0.30,
                 solid_capstyle="butt", zorder=2)
-        ax.scatter([s["p50"]], [y], color=c, s=60, zorder=4)                       # median
+        ax.scatter([s["median"]], [y], color=c, s=60, zorder=4)                    # median
         ax.scatter([s["mean"]], [y], color="black", marker="|", s=260, zorder=5)   # mean
         ax.scatter([s["max"]], [y], color=c, marker="D", s=24, zorder=4)           # tail max
 
         ax.annotate(f"min {int(s['min'])}", (s["min"], y), textcoords="offset points",
                     xytext=(-6, 10), ha="right", fontsize=8, color=c)
-        ax.annotate(f"p50 {int(s['p50'])}", (s["p50"], y), textcoords="offset points",
-                    xytext=(0, -16), ha="center", fontsize=8, color=c)
+        ax.annotate(f"mean {int(round(s['mean']))}", (s["mean"], y), textcoords="offset points",
+                    xytext=(0, 22), ha="center", fontsize=8, color="black")   # stacked above min
+        ax.annotate(f"median {int(round(s['median']))}", (s["median"], y), textcoords="offset points",
+                    xytext=(0, -17), ha="center", fontsize=8, color=c)
         if s["max"] - s["min"] > 4:
             ax.annotate(f"p99 {int(s['p99'])} / max {int(s['max'])}", (s["max"], y),
                         textcoords="offset points", xytext=(8, 10), ha="left", fontsize=8, color=c)
@@ -73,7 +77,7 @@ def main() -> None:
     ax.grid(axis="x", alpha=0.3)
     ax.set_title(title, fontsize=11)
 
-    legend = [Line2D([0], [0], marker="o", color="w", markerfacecolor="gray", markersize=8, label="median (p50)"),
+    legend = [Line2D([0], [0], marker="o", color="w", markerfacecolor="gray", markersize=8, label="median"),
               Line2D([0], [0], marker="|", color="black", markersize=12, label="mean"),
               Line2D([0], [0], marker="D", color="w", markerfacecolor="gray", markersize=6, label="max"),
               Line2D([0], [0], color="gray", lw=8, alpha=0.3, label="min..p99 (bulk)"),

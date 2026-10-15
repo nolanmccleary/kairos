@@ -565,11 +565,11 @@ def write_balance_csv(path: Path, bal: BalanceResult) -> None:
 def _write_micro_csv(path: Path, rows: Sequence[tuple[str, Sequence[int]]], extra: Sequence = ()) -> None:
     with path.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["distribution", "count", "min", "mean", "p50", "p99", "max", "unit"])
+        w.writerow(["distribution", "count", "min", "mean", "median", "p99", "max", "unit"])
         for name, v in rows:
             s = dist_stats(v)
             w.writerow([name, s["count"], s["min"], round(s["mean"], 1),
-                        s["p50"], s["p99"], s["max"], "cycles"])
+                        s["median"], s["p99"], s["max"], "cycles"])
         for row in extra:
             w.writerow(row)
 
@@ -838,13 +838,22 @@ def _pct(sorted_v: Sequence[int], q: float) -> int:
     return sorted_v[i]
 
 
+def _median(sorted_v: Sequence[int]) -> float:
+    n = len(sorted_v)
+    if not n:
+        return 0.0
+    mid = n // 2
+    # true median: average the two middle values for even n, not a nearest-rank pick.
+    return float(sorted_v[mid]) if n % 2 else (sorted_v[mid - 1] + sorted_v[mid]) / 2.0
+
+
 def dist_stats(v: Sequence[int]) -> dict[str, float]:
     s = sorted(v)
     n = len(s)
     if not n:
-        return {"count": 0, "min": 0, "mean": 0.0, "p50": 0, "p99": 0, "max": 0}
+        return {"count": 0, "min": 0, "mean": 0.0, "median": 0, "p99": 0, "max": 0}
     return {"count": n, "min": s[0], "mean": sum(s) / n,
-            "p50": _pct(s, 0.50), "p99": _pct(s, 0.99), "max": s[-1]}
+            "median": _median(s), "p99": _pct(s, 0.99), "max": s[-1]}
 
 
 def _hist(ax, v: Sequence[int], title: str, color: str) -> None:
@@ -1529,7 +1538,7 @@ def schedsweep_test(ocd: OCD, symbols: dict[str, int]) -> list[tuple[int, list[i
     for N, samples in rows:
         s = dist_stats(samples)
         print(f"  N={N:<3} n={int(s['count']):<4} min={int(s['min']):<5} mean={s['mean']:<7.1f} "
-              f"p50={int(s['p50']):<5} p99={int(s['p99']):<5} max={int(s['max'])}")
+              f"median={int(s['median']):<5} p99={int(s['p99']):<5} max={int(s['max'])}")
     return rows
 
 
@@ -1537,11 +1546,11 @@ def write_schedsweep_csv(path: Path, rows: list[tuple[int, list[int]]]) -> None:
     # plot_latency_ranges.py input format: one distribution row per task count.
     with path.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["distribution", "count", "min", "mean", "p50", "p99", "max", "unit"])
+        w.writerow(["distribution", "count", "min", "mean", "median", "p99", "max", "unit"])
         for N, samples in rows:
             s = dist_stats(samples)
             w.writerow([f"{N} tasks", int(s["count"]), int(s["min"]), round(s["mean"], 1),
-                        int(s["p50"]), int(s["p99"]), int(s["max"]), "cycles"])
+                        int(s["median"]), int(s["p99"]), int(s["max"]), "cycles"])
 
 
 def write_artifacts(outdir: Path, alloc_metrics: list[Metric], edf_results: list[EDFResult],

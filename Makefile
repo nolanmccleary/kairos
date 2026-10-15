@@ -79,6 +79,8 @@ ENABLE_L2     ?= 1   # PL310 outer (L2) cache; requires ENABLE_MMU
 ENABLE_SMP    ?= 1
 ENABLE_NULL_GUARD ?= 1   # unmap VA 0..1MB so NULL / near-NULL derefs fault (needs ENABLE_MMU)
 
+FREERTOS ?= 0   # 0 = Kairos battery (test.py), 1 = FreeRTOS battery (test_freertos.py)
+
 
 # Self-boot test gate: compile the spin at the top of main() that hangs until
 # JTAG writes g_boot_release. Needed only for the no-debugger SD boot flow --
@@ -112,19 +114,25 @@ CFLAGS := \
 	-Wa,--defsym,BOOT_TEST=$(BOOT_TEST) \
 	-Wa,--defsym,MODE_TEST=1 \
 	-Wa,--defsym,BOARD_GICC_BASE=$(BOARD_GICC_BASE) \
-	-Wa,--defsym,BOARD_IS_QEMU=$(BOARD_IS_QEMU)
+	-Wa,--defsym,BOARD_IS_QEMU=$(BOARD_IS_QEMU) \
+	-Wa,--defsym,USE_FREERTOS=$(FREERTOS)
 
 
-# FreeRTOS binary (NON-default). Only `make FREERTOS=1 ...` pulls in any FreeRTOS code
-# or its separate linker fragment; the normal build and de1-soc.ld carry no FreeRTOS
-# references. USE_FREERTOS switches the appcode (main.c) to the allocator sweep only and
-# points workload_allocsweep.c at pvPortMalloc/vPortFree instead of kMalloc/kFree.
-FREERTOS ?= 0
+# FreeRTOS battery (make FREERTOS=1). The ONE FreeRTOS binary: FreeRTOS scheduler + heap_4,
+# with every bench (allocator sweeps + the task-stacking scheduler sweep) run as FreeRTOS
+# tasks. FREERTOS=0 is the Kairos battery; the default build and de1-soc.ld carry no
+# FreeRTOS references. workload_allocsweep.c/workload_fragsweep.c are allocator-agnostic
+# (USE_FREERTOS -> pvPortMalloc/vPortFree) and shared with the Kairos battery.
 LDSCRIPT_FLAGS := -T $(LDSCRIPT)
 ifeq ($(FREERTOS),1)
-  CORE += freertos_port/FreeRTOS-Kernel/portable/MemMang/heap_4.c \
-          freertos_port/freertos_heap_shim.c
-  CFLAGS += -DUSE_FREERTOS=1 \
+  FK := freertos_port/FreeRTOS-Kernel
+  CORE += $(FK)/portable/MemMang/heap_4.c freertos_port/freertos_heap_shim.c \
+          $(FK)/tasks.c $(FK)/list.c $(FK)/queue.c \
+          $(FK)/portable/GCC/ARM_CA9/port.c \
+          $(FK)/portable/GCC/ARM_CA9/portASM.S \
+          freertos_port/freertos_glue.c freertos_port/freertos_main.c \
+          bench/workload_freertos_schedsweep.c
+  CFLAGS += -DUSE_FREERTOS=1 -mfpu=neon -mfloat-abi=softfp \
             -Ifreertos_port/libc_shim -Ifreertos_port \
             -Ifreertos_port/FreeRTOS-Kernel/include \
             -Ifreertos_port/FreeRTOS-Kernel/portable/GCC/ARM_CA9
@@ -160,6 +168,10 @@ build/%.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 build/%.o: %.s
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build/%.o: %.S
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

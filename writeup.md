@@ -405,6 +405,11 @@ We can also just watch the bound assert itself on real hardware. The EDF test sw
 
 The taskset runs completely clean up to $U \approx 0.99$ and only begins missing right as $U$ reaches 1. This is exactly where Theorem 7 says it should. We see some misses appear *below* $U = 1$. These are the cost of running on a real chip: scheduler overhead, cache jitter, and the integer rounding of each $C_i$ eat the last percent of slack, so the practical knee sits just under the ideal bound. Past $U = 1$ the misses explode, because now the demand genuinely exceeds what the core can deliver.
 
+
+
+
+### Latency
+
 Speaking of jitter, here are some figures detailing the IRQ latency and context switch cost:
 
 ![IRQ dispatch latency: cycles from the GIC SGI trigger to the ISR body](figures/irqlat_latency.png)
@@ -420,6 +425,34 @@ For real-time work the number that matters isn't the median, it's the spread, be
 So how does that stack up? FreeRTOS on a Cortex-M quotes ~86 cycles for its context switch in its own FAQ, and independent measurements land around [~220 cycles on a Cortex-M4](https://www.researchgate.net/figure/Time-for-FreeRTOS-task-context-switching-on-STM32F407IG-ARM-Cortex-M4-for_fig2_325358846). In cycles that makes our ~1140 look terrible — but cycles aren't comparable across these parts, time is. A Cortex-M4 clocks at ~100–180 MHz, so ~86–220 cycles is ~0.5–1.3 µs of wall-clock, i.e. the *same* ballpark as our ~1.43 µs, except we're paying it on a dual-core A9 that drags caches, an MMU, and SMP coherence along and saves the full register file by hand. In absolute time we're basically even with the Cortex-M RTOS everyone benchmarks against. The one place the Cortex-M flatly wins is interrupt *entry*: its NVIC reaches the ISR in a hardware-fixed 12 cycles (~70 ns) with zero jitter, where our GIC path is ~0.21 µs with a small tail — the GIC is simply a larger, more general piece of machinery than a tightly-coupled NVIC.
 
 The verdict: for the firm/soft real-time periodic workloads this targets, the jitter is comfortably sufficient — negligible against millisecond-scale deadlines, and competitive in absolute time with FreeRTOS on a Cortex-M, which is a genuinely surprising result for a chip supposedly unfit for real-time. Where it would fall short is sub-microsecond *hard* determinism: tight interrupt-to-pin response or MHz-rate edges, where the GIC tail and cache jitter matter and a bare Cortex-M (or the FPGA fabric) is the right tool, which is exactly the work you'd want to keep off the A9 anyway. 
+
+
+
+The Kairos EDF scheduler uses min-heaps. These incur a O(log n) worst case bound versus the O(1) bound of the simpler RR scheduler.
+
+To see what that costs in practice, I swept the per-tick scheduler work against the number of loaded tasks (1 to 64), single core, underloaded so each task does almost nothing and the curve isolates the scheduler's own bookkeeping rather than compute. The same sweep runs on both kernels on the same chip: Kairos times its `next_thread()` (the full per-tick switch decision), and FreeRTOS times `xTaskIncrementTick` under its own scheduler. Both capture the part that scales with task count; the measured windows aren't byte-identical, so read the shapes, not the last cycle.
+
+![Kairos EDF: per-tick scheduler cost vs loaded task count](figures/schedsweep_kairos.png)
+
+![FreeRTOS fixed-priority: per-tick scheduler cost vs loaded task count](figures/schedsweep_freertos.png)
+
+Two things stand out. First, both medians are flat: the common-case tick is cheap and barely moves with task count, ~708 cycles (~0.89 µs) for Kairos and ~357 cycles (~0.45 µs) for FreeRTOS, all the way out to 64 tasks. The O(log n) does not show up in the typical tick because the typical tick does no releases. Second, the two diverge in exactly the place that matters, the tail. FreeRTOS stays bounded: its worst sample is ~469 cycles at one task and ~505 cycles (~0.63 µs) at 64, essentially flat, because fixed-priority selection pulls the top ready task off a bitmap in O(1) and just walks whatever came due off the delayed list, with no reordering. Kairos's tail climbs with task count: p99 goes 1072 to 1739 cycles and the worst single tick goes from 1296 cycles (~1.6 µs) at one task to 7271 cycles (~9.1 µs) at 64. That growth is the heap: EDF keeps the ready set ordered by deadline, so each release is a O(log n) insert/extract, and when several tasks come due in the same tick the worst-case tick stacks several of those on top of each other.
+
+So the honest scorecard is that fixed-priority is the cheaper and flatter scheduler here, roughly 2x less per tick at the baseline and a worst case that does not grow with the taskset. Kairos pays that premium for dynamic deadline ordering, the thing fixed-priority structurally cannot do, plus the dual-core balancing and the persistent class layered on top. And the premium is small against the deadline it has to clear: even Kairos's worst tick at 64 tasks is 3.6% of the 1 ms tick (200000 cycles), where FreeRTOS sits at 0.25%, so neither scheduler is anywhere near being the bottleneck for the kHz-scale periodic work this targets.
+
+However, if RR scheduling is desired Kairos can also support that too just like FreeRTOS
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

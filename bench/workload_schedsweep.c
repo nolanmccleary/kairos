@@ -89,7 +89,8 @@ void schedsweep_run( void )
         g_schedsweep_counts[ li ] = 0u;
 
         /* Load N underloaded periodic tasks on CPU0 (spread periods -> staggered
-         * releases, so the heaps hold a rolling set of ~N entries). */
+         * releases, representative of a real taskset rather than a synchronized storm;
+         * the ~no-op job keeps compute utilization near zero). */
         __asm__ volatile ( "cpsid i" ::: "memory" );
         for( uint32_t i = 0; i < N; i++ )
         {

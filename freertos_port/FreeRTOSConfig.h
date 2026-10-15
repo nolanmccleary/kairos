@@ -57,7 +57,7 @@
 
 /* Tick-interrupt glue is provided in freertos_glue.c for the scheduler build (step 2).
  * The allocator-only build (step 1) does not compile the port, so these stay undefined. */
-#ifdef USE_FREERTOS_SCHED
+#ifdef USE_FREERTOS
     extern void vConfigureTickInterrupt( void );
     extern void vClearTickInterrupt( void );
     #define configSETUP_TICK_INTERRUPT()        vConfigureTickInterrupt()

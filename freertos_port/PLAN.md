@@ -121,4 +121,29 @@ the headline.
 - [ ] step 1 on hardware: run normal (make boot) + FreeRTOS (make boot FREERTOS=1), drive
       with test.py / test_freertos.py, compare the two allocsweep plots. (app.bin still has
       to be placed on the card at SD_APPCODE_LBA, same pre-existing step as the normal boot.)
-- [ ] step 2 scheduler port
+## STRUCTURE (locked): two batteries, one flag
+- `make` (FREERTOS=0) = **Kairos battery**: Kairos scheduler, Kairos benches, driven by test.py.
+- `make FREERTOS=1` = **FreeRTOS battery**: ONE binary, FreeRTOS scheduler up, every bench
+  (heap_4 allocsweep + fragsweep + the task-stacking scheduler sweep) runs as a FreeRTOS
+  task on the live scheduler, driven by test_freertos.py.
+- main.c has exactly TWO states: `#if USE_FREERTOS -> freertos_main()` else the Kairos suite.
+- `USE_FREERTOS` is the single define/defsym (no separate USE_FREERTOS_SCHED); the allocsweep/
+  fragsweep workloads are allocator-agnostic (shared source, pvPortMalloc vs kMalloc).
+
+- [x] FreeRTOS battery COMPILES + LINKS + UNIFIED (`make FREERTOS=1`). Done:
+      vendored tasks/list/queue/port/portASM linked; FreeRTOSConfig scheduler section;
+      freertos_glue.c (gtimer tick arm/clear + vApplicationIRQHandler dispatch of PPI 27 ->
+      FreeRTOS_Tick_Handler); freertos_main.c (FPU enable + a heartbeat task + vTaskStartScheduler);
+      vector table swap (SWI->FreeRTOS_SWI_Handler, IRQ->FreeRTOS_IRQ_Handler via .if
+      USE_FREERTOS_SCHED); cpu0_startup skips cpu0_timer_start+psched_init+cpsie, cpu1 skips its
+      timer (CPU1 parks in cpu1_main); main->freertos_main. Kairos scheduler gc's out; OCRAM
+      fits (34312 B text). FPU: -mfpu=neon -mfloat-abi=softfp (link-compatible with nofp libgcc)
+      + runtime CPACR/FPEXC enable. Normal + allocator builds unaffected.
+      NOT yet run on hardware. First-run watch items:
+        * xPortStartScheduler asserts configUNIQUE_INTERRUPT_PRIORITIES(32) == actual GIC
+          priority bits; if the Cyclone V GIC isn't 5 bits it traps in configASSERT.
+        * tick must reach FreeRTOS_Tick_Handler (confirm PPI id == 27 and the gtimer fires).
+        * bootable: `make boot FREERTOS_SCHED=1` -- the FreeRTOS kernel is all OCRAM (preloader),
+          appcode is ~empty (gc'd), so it should self-contain; verify.
+- [ ] step 2 on hardware: confirm tick fires + heartbeat task runs, then add the FreeRTOS
+      scheduler-cost measurement (counterpart to schedsweep) in freertos_main.

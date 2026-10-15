@@ -26,7 +26,8 @@ def load(csv_path: Path) -> tuple[dict[str, dict[str, float]], int]:
             if name == "baseline_cycles":
                 baseline = int(r["count"])
                 continue
-            rows[name] = {k: float(r[k]) for k in ("min", "mean", "p50", "p99", "max")}
+            rows[name] = {k: float(r[k]) for k in ("min", "mean", "p99", "max")}
+            rows[name]["median"] = float(r.get("median", r.get("p50")))   # accept older p50-headed CSVs
     return rows, baseline
 
 
@@ -50,13 +51,15 @@ def main() -> None:
         ax.plot([s["min"], s["max"]], [y, y], color=c, lw=1.2, alpha=0.45, zorder=1)
         ax.plot([s["min"], s["p99"]], [y, y], color=c, lw=7.0, alpha=0.30,
                 solid_capstyle="butt", zorder=2)
-        ax.scatter([s["p50"]], [y], color=c, s=55, zorder=4, label="_p50")       # median
+        ax.scatter([s["median"]], [y], color=c, s=55, zorder=4, label="_median")  # median
         ax.scatter([s["mean"]], [y], color="black", marker="|", s=240, zorder=5)  # mean
         ax.scatter([s["max"]], [y], color=c, marker="D", s=22, zorder=4)          # tail max
 
         ax.annotate(f"min {int(s['min'])}", (s["min"], y), textcoords="offset points",
                     xytext=(-6, 9), ha="right", fontsize=8, color=c)
-        ax.annotate(f"p50 {int(s['p50'])}", (s["p50"], y), textcoords="offset points",
+        ax.annotate(f"mean {int(round(s['mean']))}", (s["mean"], y), textcoords="offset points",
+                    xytext=(0, 22), ha="center", fontsize=8, color="black")   # stacked above min
+        ax.annotate(f"median {int(round(s['median']))}", (s["median"], y), textcoords="offset points",
                     xytext=(0, -15), ha="center", fontsize=8, color=c)
         if s["max"] - s["min"] > 4:   # only label the tail when there is one
             ax.annotate(f"p99 {int(s['p99'])} / max {int(s['max'])}", (s["max"], y),
@@ -73,7 +76,7 @@ def main() -> None:
                  fontsize=11)
 
     legend = [Line2D([0], [0], marker="o", color="w", markerfacecolor="gray",
-                     markersize=8, label="median (p50)"),
+                     markersize=8, label="median"),
               Line2D([0], [0], marker="|", color="black", markersize=12, label="mean"),
               Line2D([0], [0], marker="D", color="w", markerfacecolor="gray",
                      markersize=6, label="max"),

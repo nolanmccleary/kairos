@@ -311,7 +311,9 @@ void cpu0_startup(void)
     build_tables();
     set_ttb_ptrs();
     cpu0_gic_init();
-    cpu0_timer_start();
+#if !USE_FREERTOS
+    cpu0_timer_start();   /* FreeRTOS arms the tick itself via vConfigureTickInterrupt */
+#endif
 
     pmu_init();
     heap_init();        // must precede psched_init(): it kMalloc's main_thread + the deque
@@ -337,11 +339,15 @@ void cpu0_startup(void)
 #endif
 
 
+#if !USE_FREERTOS
     __asm__ volatile (
         "cpsie i\n\t"
     );
 
     psched_init();
+#endif
+    /* USE_FREERTOS: return with interrupts still masked; main() -> freertos_main()
+     * -> vTaskStartScheduler() enables them when the first task is restored. */
 }
 
 
@@ -351,6 +357,8 @@ void cpu1_startup(void)
 {
     set_ttb_ptrs();
     cpu1_gic_init();
-    cpu1_timer_start();
+#if !USE_FREERTOS
+    cpu1_timer_start();   /* single-core FreeRTOS: CPU1 gets no tick, idles in cpu1_main */
+#endif
     pmu_init();
 }

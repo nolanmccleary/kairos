@@ -40,11 +40,19 @@
 _vectors:
     B _reset_handler @; rst interrupt vectors here by abi contract
     B _undef_handler
+.if USE_FREERTOS != 0
+    B FreeRTOS_SWI_Handler
+.else
     B _swi_handler
+.endif
     B _prefetch_handler
     B _abort_handler
     NOP               @; Reserved vector
+.if USE_FREERTOS != 0
+    B FreeRTOS_IRQ_Handler
+.else
     B _irq_handler
+.endif
     B _fiq_handler
 
 
