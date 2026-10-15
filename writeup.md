@@ -43,7 +43,7 @@ As alluded to earlier, we are using a real A9 on a real SOC and so we have to wo
 
 ![The A9-based Cyclone V hardware](figures/a9_fig2.webp)
 
-Not pictured here is the Snoop Control Unit (SCU) which is used to manage cache coherence between both core's L1 caches and the MMU which is used for physical to virtual address translation and required for engaging the L1 data cache. 
+Not pictured here is the Snoop Control Unit (SCU) which is used to manage cache coherence between both core's L1 caches and the MMU which is used for physical to virtual address translation and required for engaging the L1 data cache. For Kairos we make use of both L1 caches, the L2 cache, and the SCU.
 
 
 ## Important specific numbers
@@ -204,7 +204,7 @@ host_ocram_zero:
 ```
 
 
-At this point CPU1 is engaged, vectors to _reset_handler, executes all of the previous cache invalidation + BP + prefetch code and jumps to `_cpu1_fork`, wherein the code will be discussed shortly. 
+At this point CPU1 is engaged, branches to _reset_handler, executes all of the previous cache invalidation + BP + prefetch code and jumps to `_cpu1_fork`, wherein the code will be discussed shortly. 
 
 
 
@@ -318,13 +318,12 @@ The diagram below illustrates this process:
 In more detail: We have two levels of granularity - buckets, which progress as powers of 2, and bins, which split buckets evenly into 32 different size classes. We have one bitmap to encode all free buckets and an array of bitmaps to encode which bins inside that bucket are free. If any bin is free inside that bucket that bucket's respective map bit is set. Finding the first available bucket is very efficient as all we need to do is find the position of the leading one. From there we calculate the excess and find the first bin inside that bucket that could fit our target block. We then search all bins and buckets after and including this minimum in order to find the first available block of free memory. Once we allocate this free block we re-map the remainder to the first bucket-bin pair that it is larger than and set the relevant bits if no free block previously existed at that location. At the same time we clear the old bucket and bin bits if the old free block was the only free one for that size. We keep track of the free blocks for each size class using doubly linked list. Given m buckets and n bins this results in a maximum of mxn active free lists at a given time. Each free node needs a minimum of 16 bytes of space: 4 to store the size, 4 to store the logical predecessor, 4 to store the logical successor, and 4 to store the previous physical block address. Storing the previous physical block address is necessary to enable the following to take place: suppose a block of size k is freed and was located in front of another free block of size s; we want to be able to remove the s-sized free list entry and make a new (k+s) sized free list entry but we need the physical address of the previous block in order to check 'behind' to see if it is free. We would also want to coalesce any free blocks directly in front of our target if needed but we can get there for free because we know the size. Given every free block needs to be 16 bytes at a minimum that means the minimum size for an allocated block must also be 16 bytes wherein the size and previous physical address are held in the first 8 bytes followed by a minimum payload of 8 bytes, the first 8 of which get converted to the next/prev pointers when the block is freed.  
 
 
-To put the performance advantages of TLSF into context, we compare it against a simple free-list allocator under fragmentation. The stand-in is FreeRTOS's heap_4: a single free list kept in address order, first-fit on allocation, coalescing on free. The benchmark holds a growing number of non-coalescable free blocks (a longer and longer free list) and times an allocation that has to walk past all of them, plus the matching free. Both allocators run on the same board, clock, and heap.
+To put the performance advantages of TLSF into context, we compare it against a simple free-list allocator under fragmentation. The stand-in is FreeRTOS's `heap_4`. `heap_4` uses a single free list kept in address order. Every time a block is allocated, it trvaerses from the base to find the next free block of a viable size (O(N)). We compare worst-case bounds by allocating more and more blocks before our timed allocation to surface the worst-case runtime characteristics.
 
 ![Kairos TLSF: allocator cost vs fragmentation (free-list length)](figures/fragsweep_tlsf.png)
 
 ![FreeRTOS heap_4: allocator cost vs fragmentation (free-list length)](figures/fragsweep_heap4.png)
 
-This difference is the whole reason TLSF exists. Its cost is flat: about 600 cycles to allocate and 170 to free, no matter how fragmented the heap is, because the segregated free lists plus bitmaps turn the search into a couple of bit operations instead of a walk. The free-list allocator is actually cheaper when the heap is nearly empty (around 90 cycles, since first-fit over a one-element list is trivial), but its cost grows linearly with the free-list length, reaching roughly 4200 cycles to allocate and 2100 to free once a few hundred holes have built up, and it keeps climbing with no upper bound.
 
 
 
@@ -374,20 +373,31 @@ Acknowledging a tick is therefore two levels. The asm `_irq_handler` first calls
 
 
 
+During SMP, the load balancer tracks utilization and assigns new periodic tasks to whichever core has lower utilization at that time. An EMA filter is used on the utilization calculations in order to provide a less volatile estimate. Persistent task may also be pinned to whichever core has lower utilization (as well as arbitrarily if desired) but they do not contribute to the utilization estimate themselves. The mechanics above lead to the following two important points:
+
+1. If overall per-core utilization goes over 1.0, the system is unpredicatable
+
+2. If persistent tasks are not pinned wisely or the cores are otherwise very high-u they may be starved.
+
+As such, it's recommended that periodic tasks be written in much the same way as periodic ISR code such that only the minimum amount of computation needed lives inside the periodic task and the period provides an ample degree of slack. For realistic workloads this is generally very doable. 
+
+
+
+
+
 ### Schedulability Bounds
 
 Kairos' utilization tracking and load-balancing systems are [based on this paper](https://www.cis.upenn.edu/~lee/07cis505/Lec/liu73scheduling.pdf), which proves the Liu and Layland EDF Schedulability guarantee for single core processors. Math summary:
 
-
-The model is the usual one: $m$ independent periodic tasks, where task $i$ releases a job every $T_i$ ticks, each job needs $C_i$ ticks of compute, the deadline is the end of the period ($D_i = T_i$), and the processor is single-core and preemptive. Define the **processor utilization** as the fraction of time the tasks demand:
+Assume $m$ independent periodic tasks, where task $i$ releases a job every $T_i$ ticks, each job needs $C_i$ ticks of compute, the deadline is the end of the period ($D_i = T_i$), and the processor is single-core. Define the **processor utilization** as the fraction of time the tasks demand:
 
 $$U = \sum_{i=1}^{m} \frac{C_i}{T_i}$$
 
-The paper's deadline-driven scheduling algorithm is just EDF: at any instant, run the released job whose deadline is nearest. Liu and Layland's result (their Theorem 7) is that this is an exact, tight test:
+The paper's deadline-driven scheduling algorithm is just EDF: at any instant, run the released job whose deadline is nearest. Liu and Layland's result (their Theorem 7) is that this is an exact test:
 
 $$\text{EDF is feasible} \iff U = \sum_{i=1}^{m} \frac{C_i}{T_i} \le 1$$
 
-In other words the least upper bound on utilization is a full **100%** — EDF can use every spare cycle. The two directions are both easy to see over one hyperperiod $H = T_1 T_2 \cdots T_m$:
+In other words the least upper bound on utilization is a full **100%**  EDF can use every spare cycle. The two directions are both easy to see over one hyperperiod $H = T_1 T_2 \cdots T_m$:
 
 - **Necessity.** In $H$ ticks task $i$ releases $H/T_i$ jobs, so the total compute demanded is $\sum_i \frac{H}{T_i} C_i = H \cdot U$. If $U > 1$ that demand exceeds the $H$ ticks available, so *no* algorithm can meet every deadline.
 - **Sufficiency.** Their Theorem 6 shows EDF never leaves the processor idle before a missed deadline (an "overflow"). So if any idle time exists, which it must when $U \le 1$, since demand $H \cdot U \le H$, there can be no overflow, and every deadline is met.
@@ -399,11 +409,16 @@ $$U \le m\left(2^{1/m} - 1\right) \xrightarrow{m \to \infty} \ln 2 \approx 0.693
 
 so RMS can be forced to miss deadlines at ~69% load (nice) while EDF is still fine. As long as a core stays at or below $U = 1$ it is provably schedulable, and the headroom $1 - U$ is the slack the round-robin persistent threads and any new periodic tasks get to run in. Note that at $U = 1$ EDF still meets every deadline, however there is zero slack here and we should avoid this state at all costs.
 
-We can also just watch the bound assert itself on real hardware. The EDF test sweeps a three-task set from light load up past saturation and counts deadline misses at each configured utilization $U = \sum_i C_i/T_i$:
+
+Intuitively: Say you have one task that takes 0.9s to run and has a 1s period. You would have 0.1s of slack to do other stuff. Now you have another task that takes 1s to run and has a 10s period. You would need 10 of those 0.1s intervals to fire inside that 10s period. Thankfully given task 1 has a 1s period you would get *exactly* 10. $$\frac{0.9}{1} + \frac{1}{10} = 0.9 + 0.1 = 1.0$$
+Now say we shorten task 2's period to 9s. You can no longer fit 10 of those (0.9, 1) cycles inside the larger 9s window. We never have enough slack to finish task 2 inside those 9s so we can't say that this scheme is schedulable. 
+
+
+The figures below show EDF running on real hardware at different utilizations:
 
 ![EDF schedulability: deadline misses vs configured utilization, showing the crossover at U = 1](figures/edf_crossover.png)
 
-The taskset runs completely clean up to $U \approx 0.99$ and only begins missing right as $U$ reaches 1. This is exactly where Theorem 7 says it should. We see some misses appear *below* $U = 1$. These are the cost of running on a real chip: scheduler overhead, cache jitter, and the integer rounding of each $C_i$ eat the last percent of slack, so the practical knee sits just under the ideal bound. Past $U = 1$ the misses explode, because now the demand genuinely exceeds what the core can deliver.
+The taskset runs completely clean up to $U \approx 0.99$ and only begins missing right as $U$ reaches 1. The reason it starts missing before $U=1.0$ can be explained as follows: In our previous example we showed that $U = 1.0$ for $(0.9, 1), (1, 10)$. However, this doesn't account for scheduler overhead. Real schedulers take time to run their context switches and that time eats into the slack. The real budget for task 1 might looks something more like $(0.9, 0.095, 0.05)$ where the last coordinate denotes time spent in the scheduler. There's also no guarantee this slack is constant, as it depends on the state of the EDF heaps, SDRAM access latency (thread control blocks nominally live in SDRAM which as shown above does not provide constant read latency), and possible heap operations (freeing of outgoing threads for example, these could be moved to a persistent garbage collection routine to preserve scheduler determinism if desired in the future).
 
 
 
@@ -416,57 +431,45 @@ Speaking of jitter, here are some figures detailing the IRQ latency and context 
 
 ![Context-switch cost in next_thread(): a full switch to a different task vs a resume of the same task](figures/ctxsw_latency.png)
 
-The A9 here runs at 800 MHz (the Main PLL VCO is 1.6 GHz and the MPU clock is half of that; you can double-check this against the tick — the global timer runs at a quarter of the MPU clock, 200 MHz, and `AUTOINC = 199999` gives one IRQ every 200000 of its counts, i.e. 1 kHz), so each cycle is 1.25 ns and we can put real time on these numbers.
+The A9 here runs at 800 MHz (the Main PLL VCO is 1.6 GHz and the MPU clock is half of that). The global timer runs at a quarter of the MPU clock i.e. 200 MHz. Given `AUTOINC = 199999`, we have one IRQ every 200000 of its counts i.e. 1 kHz. Given that we use the Performance Monitoring Unit (PMU)'s cycle counter to calculate latency at different points in our system, we can decompose all operations carried out by the processor into collections of 1.25ns tick increments.
 
-IRQ dispatch — the gap from the timer interrupt firing to the first instruction of the handler body — sits at 166 cycles median (~0.21 µs), with essentially everything inside 161–173 cycles and the single worst sample over 1024 trials at 232 cycles (~0.29 µs). The context switch inside `next_thread()` splits into two cases. A *resume*, where the same task keeps running and we only re-validate and return, costs ~730 cycles median (~0.91 µs). A full *switch* to a different task — which saves and restores the entire integer register file through the manual exception frame described above — costs ~1140 cycles median (~1.43 µs), tailing to 1627 cycles (~2.03 µs) in the worst case.
+IRQ dispatch incurrs a 166 cycles median (~0.21 µs) with essentially everything inside 161–173 cycles. The single worst sample over 1024 trials is 232 cycles (~0.29 µs). The context switch inside `next_thread()` can either resume the same task or start a new one. Starting a new task may require O(log n) heap operations so the latency is higher and more variable. Resuming costs ~730 cycles median (~0.91 µs). Switching costs ~1140 cycles median (~1.43 µs), tailing to 1627 cycles (~2.03 µs) in the worst case. Note that this switching cost is only for this particular workload. We'll see shortly that it goes up as the EDF heep becomes more and more loaded. For future reference the test above used 3 periodic tasks and no persistent ones.
 
-For real-time work the number that matters isn't the median, it's the spread, because jitter is what turns "finishes in time" into "sometimes misses." Here the spread is tight and bounded: IRQ dispatch varies by ~70 cycles (~90 ns) across its whole range, the switch by ~550 cycles (~0.7 µs), and both have short tails rather than fat ones. Against the 1 ms scheduler tick (200000 cycles) the worst-case switch is 0.8% of a tick and the worst-case IRQ dispatch is 0.12%. For periodic control/DSP work in the kHz range — which is exactly what this is for — the per-event jitter sits three to four orders of magnitude below the deadline. Even a 10 kHz loop (100 µs period) only spends ~2% of its period on a worst-case switch.
+Timing variance is generally more of a concern than latency for Real-Time work. IRQ dispatch varies by ~70 cycles (~90 ns) across its whole range, the switch by ~550 cycles (~0.7 µs), and both have short tails rather than fat ones. Against the 1 ms scheduler tick (200000 cycles) the worst-case switch is 0.8% of a tick and the worst-case IRQ dispatch is 0.12%. For periodic control/DSP work in the kHz range the per-event jitter sits three to four orders of magnitude below the deadline.
 
-So how does that stack up? FreeRTOS on a Cortex-M quotes ~86 cycles for its context switch in its own FAQ, and independent measurements land around [~220 cycles on a Cortex-M4](https://www.researchgate.net/figure/Time-for-FreeRTOS-task-context-switching-on-STM32F407IG-ARM-Cortex-M4-for_fig2_325358846). In cycles that makes our ~1140 look terrible — but cycles aren't comparable across these parts, time is. A Cortex-M4 clocks at ~100–180 MHz, so ~86–220 cycles is ~0.5–1.3 µs of wall-clock, i.e. the *same* ballpark as our ~1.43 µs, except we're paying it on a dual-core A9 that drags caches, an MMU, and SMP coherence along and saves the full register file by hand. In absolute time we're basically even with the Cortex-M RTOS everyone benchmarks against. The one place the Cortex-M flatly wins is interrupt *entry*: its NVIC reaches the ISR in a hardware-fixed 12 cycles (~70 ns) with zero jitter, where our GIC path is ~0.21 µs with a small tail — the GIC is simply a larger, more general piece of machinery than a tightly-coupled NVIC.
+So how does that stack up? FreeRTOS on a Cortex-M quotes ~86 cycles for its context switch in its own FAQ, and independent measurements land around [~220 cycles on a Cortex-M4](https://www.researchgate.net/figure/Time-for-FreeRTOS-task-context-switching-on-STM32F407IG-ARM-Cortex-M4-for_fig2_325358846). In cycles that makes our ~1140 look terrible but cycles aren't directly comparable because the Cortex-M is also clocked differently. A Cortex-M4 clocks at ~100–180 MHz, so ~86–220 cycles is ~0.5–1.3 µs of wall-clock which is comparable to our ~1.43 µs. The surprising result here is we can achieve this on a dual-core A9 that drags caches, an MMU, and SMP coherence along while having to save the full register file by hand. In absolute time we're basically even with the Cortex-M RTOS everyone benchmarks against. The one place the Cortex-M flatly wins is interrupt *entry*: its NVIC reaches the ISR in a hardware-fixed 12 cycles (~70 ns) with zero jitter, where our GIC path is ~0.21 µs with a small tail. The GIC hardware simply isn't designed to guarantee fixed, low latency entry and there's nothing we can do to change that.
 
-The verdict: for the firm/soft real-time periodic workloads this targets, the jitter is comfortably sufficient — negligible against millisecond-scale deadlines, and competitive in absolute time with FreeRTOS on a Cortex-M, which is a genuinely surprising result for a chip supposedly unfit for real-time. Where it would fall short is sub-microsecond *hard* determinism: tight interrupt-to-pin response or MHz-rate edges, where the GIC tail and cache jitter matter and a bare Cortex-M (or the FPGA fabric) is the right tool, which is exactly the work you'd want to keep off the A9 anyway. 
+The verdict: for the firm/soft real-time periodic workloads this targets, the jitter is comfortably sufficient, negligible against millisecond-scale deadlines, and competitive in absolute time with FreeRTOS on a Cortex-M. This is a genuinely surprising result for a chip supposedly unfit for real-time usage. Where it would fall short is sub-microsecond *hard* determinism, tight interrupt-to-pin response, or MHz-rate edges, where the GIC tail and cache jitter matter and a bare Cortex-M (or the FPGA fabric) is the right tool, which is exactly the work you'd want to keep off the A9 anyway. 
 
 
 
 The Kairos EDF scheduler uses min-heaps. These incur a O(log n) worst case bound versus the O(1) bound of the simpler RR scheduler.
 
-To see what that costs in practice, I swept the per-tick scheduler work against the number of loaded tasks (1 to 64), single core, underloaded so each task does almost nothing and the curve isolates the scheduler's own bookkeeping rather than compute. The same sweep runs on both kernels on the same chip: Kairos times its `next_thread()` (the full per-tick switch decision), and FreeRTOS times `xTaskIncrementTick` under its own scheduler. Both capture the part that scales with task count; the measured windows aren't byte-identical, so read the shapes, not the last cycle.
+To see what that costs in practice, we can sweep the per-tick scheduler work against the number of loaded tasks (1 to 64), single core, underloaded so each task does almost nothing and the curve isolates the scheduler's own bookkeeping rather than compute. The same sweep runs on both kernels on the same chip: Kairos times its `next_thread()` (the full per-tick switch decision), and FreeRTOS times `xTaskIncrementTick` under its own scheduler.
 
 ![Kairos EDF: per-tick scheduler cost vs loaded task count](figures/schedsweep_kairos.png)
 
 ![FreeRTOS fixed-priority: per-tick scheduler cost vs loaded task count](figures/schedsweep_freertos.png)
 
-Two things stand out. First, both medians are flat: the common-case tick is cheap and barely moves with task count, ~708 cycles (~0.89 µs) for Kairos and ~357 cycles (~0.45 µs) for FreeRTOS, all the way out to 64 tasks. The O(log n) does not show up in the typical tick because the typical tick does no releases. Second, the two diverge in exactly the place that matters, the tail. FreeRTOS stays bounded: its worst sample is ~469 cycles at one task and ~505 cycles (~0.63 µs) at 64, essentially flat, because fixed-priority selection pulls the top ready task off a bitmap in O(1) and just walks whatever came due off the delayed list, with no reordering. Kairos's tail climbs with task count: p99 goes 1072 to 1739 cycles and the worst single tick goes from 1296 cycles (~1.6 µs) at one task to 7271 cycles (~9.1 µs) at 64. That growth is the heap: EDF keeps the ready set ordered by deadline, so each release is a O(log n) insert/extract, and when several tasks come due in the same tick the worst-case tick stacks several of those on top of each other.
+Two things stand out. First, both medians are flat: the common-case tick is cheap and barely moves with task count, ~708 cycles (~0.89 µs) for Kairos and ~357 cycles (~0.45 µs) for FreeRTOS, all the way out to 64 tasks. The O(log n) does not show up in the typical tick because the typical tick does not release anything. Secondly, the two diverge in the tails. FreeRTOS stays bounded: its worst sample is ~469 cycles at one task and ~505 cycles (~0.63 µs) at 64, essentially flat, because fixed-priority selection pulls the top ready task off a bitmap in O(1) and just walks whatever came due off the delayed list with no reordering. Kairos's tail climbs with task count: p99 goes 1072 to 1739 cycles and the worst single tick goes from 1296 cycles (~1.6 µs) at one task to 7271 cycles (~9.1 µs) at 64. That growth is due to minheap operations. EDF keeps the deadHeap set ordered by deadline and the relHeap set ordered by release time, so each release from relHeap is a O(log n) extract + insertion into deadHeap, and every finished periodic task is a O(log n) extract + insertion from deadHeap to relHeap. When several tasks come due in the same tick the worst-case tick stacks several of those on top of each other, so in the future a time-staggering mechanism may be a good idea for periodic tasks that are commited to the scheduler at the same time. 
 
-So the honest scorecard is that fixed-priority is the cheaper and flatter scheduler here, roughly 2x less per tick at the baseline and a worst case that does not grow with the taskset. Kairos pays that premium for dynamic deadline ordering, the thing fixed-priority structurally cannot do, plus the dual-core balancing and the persistent class layered on top. And the premium is small against the deadline it has to clear: even Kairos's worst tick at 64 tasks is 3.6% of the 1 ms tick (200000 cycles), where FreeRTOS sits at 0.25%, so neither scheduler is anywhere near being the bottleneck for the kHz-scale periodic work this targets.
+As we'd expect, fixed-priority is the cheaper and flatter scheduler here, roughly 2x less per tick at the baseline and a worst case that does not grow with the taskset. Kairos pays that premium for dynamic deadline ordering, the thing fixed-priority structurally cannot do, plus the dual-core balancing and the persistent class layered on top. And the premium is small against the deadline it has to clear: even Kairos's worst tick at 64 tasks is 3.6% of the 1 ms tick (200000 cycles), where FreeRTOS sits at 0.25%, so neither scheduler is anywhere near being the bottleneck for the kHz-scale periodic work this targets.
 
-However, if RR scheduling is desired Kairos can also support that too just like FreeRTOS
-
-
+Additionally, if RR scheduling is desired Kairos can also support that too, just like FreeRTOS,
 
 
 
+## Limitations
 
+If it wasn't apparent by now this isn't a production-ready kernel at all. Here's a non-exshaustive list of limitations with the system:
 
+1. It is currently only ported for the Cortex-A9 implementation on the Cyclone-V SoC
+2. All real-time bounds are empirircally derived, not formally verified
+3. The kernel is not robust at all
+4. The only synchronization primitive currently provided is a binary semaphore with a few different penalty mechanisms
+5. The test code is kind of a mess
+6. Did I mention the thing isn't robust?
 
+The reality is I've worked on this thing on and off for a few months now and most of the reward obtained has come firstly from implementing the kernel by hand because I'm weird and i like doing stuff like this and secondly from the joy of seeing an A9 do things that it was never advertised to do. The marginal effort to learning ratio required to go from where this project is now to something that could be mistaken for a hardened production-ready system is not worth it for me and I wanna start working on other things. As such, I've decided to release the project as-is with absolutely no guarantees of further updates. The code is available [here](https://github.com/nolanmccleary/kairos) and I would happily invite any discussions regarding test accuracy etc. The harness is kind of jank but if you have a DE1-SoC and an SD card you should be able to run everything and reproduce my resuts with minimal effort. 
 
-
-
-
-
-
-
-
-
-
-During SMP, the load balancer tracks utilization and assigns new periodic tasks to whichever core has lower utilization at that time. An EMA filter is used on the utilization calculations in order to provide a less volatile estimate. Persistent task may also be pinned to whichever core has lower utilization (as well as arbitrarily if desired) but they do not contribute to the utilization estimate themselves. The mechanics above lead to the following two important points:
-
-1. If overall per-core utilization goes over 1.0, the system is unpredicatable
-
-2. If persistent tasks are not pinned wisely or the cores are otherwise very high-u they may be starved.
-
-As such, it's recommended that periodic tasks be written in much the same way as periodic ISR code such that only the minimum amount of computation needed lives inside the periodic task and the period provides an ample degree of slack. For realistic workloads this is generally very doable. 
-
-We use the Performance Monitoring Unit (PMU) to keep track of cycles, here is a figure:
-
-
+There's also of course the obligatory AI disclaimer/limitation/whatever you want to call it. Most of the test code was written by Claude, most of the BSP code was either written by Claude or used old intel/altera/uboot code that it stitched together. Pretty much the entire kernel was written by hand but I'm sure Claude could improve it from it's current state. I split things this way because I wanted to get the highest amount of learning per unit time. If I wanted to completely master Cyclone V I would do everything by hand. If I was trying to ship a product I'd probably lean on Claude more. This for me at this point in time provides a happy middle ground and I'm satisfied with the outcome.
