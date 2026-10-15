@@ -56,8 +56,12 @@ static volatile uint32_t ctxsw_active;
 
 /* Called from next_thread() on every tick (both cores). Sample CPU0 only so the
  * two cores can't race the shared counters, and so the distribution is one core's. */
+extern int schedsweep_sample(uint32_t cost);
+
 void ktrace_sched_cost(uint32_t cost, int switched)
 {
+    if (schedsweep_sample(cost)) return;   /* schedsweep phase captures the per-tick cost */
+
     if (!ctxsw_active || curr_core() != CPU0) return;
 
     if (switched)

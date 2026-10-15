@@ -33,6 +33,7 @@ void ktrace_bp_micro_done(void);
 void ktrace_bp_suspend_done(void);
 void ktrace_bp_persist_ready(void);
 void ktrace_bp_persist_done(void);
+void ktrace_bp_sched_sweep_done(void);
 
 
 /* -------------------------------------------------------------------------
@@ -89,6 +90,9 @@ void ktrace_edf_tick(thread_t* running);
 
 #define KTRACE_PERSIST_DONE() \
     ktrace_bp_persist_done()
+
+#define KTRACE_SCHED_SWEEP_DONE() \
+    ktrace_bp_sched_sweep_done()
 
 #define KTRACE_SCHED_COST(cost, switched) \
     ktrace_sched_cost((cost), (switched))
@@ -163,6 +167,7 @@ void ktrace_wait_boot(void);
 #define KTRACE_SUSPEND_DONE()        ((void)0)
 #define KTRACE_PERSIST_READY()       ((void)0)
 #define KTRACE_PERSIST_DONE()        ((void)0)
+#define KTRACE_SCHED_SWEEP_DONE()    ((void)0)
 #define KTRACE_SCHED_COST(cost, switched) ((void)0)
 #define KTRACE_IRQ_PING()            ((void)0)
 #define KTRACE_MUTEX_HOLD()          ((void)0)

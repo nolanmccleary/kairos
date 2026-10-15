@@ -29,6 +29,7 @@ void suspend_run(void);
 void persistent_run(void);
 void allocsweep_run(void);
 void fragsweep_run(void);
+void schedsweep_run(void);
 
 void main(void)
 {
@@ -57,6 +58,7 @@ void main(void)
     micro_run();
     suspend_run();
     persistent_run();
+    schedsweep_run();   /* scheduler overhead vs number of loaded tasks */
 #endif
 #endif
 

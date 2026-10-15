@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse, csv, re, socket, struct, subprocess, time
+import argparse, csv, re, socket, struct, subprocess, sys, time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -1484,6 +1484,66 @@ def write_persistent_csv(path: Path, res: PersistResult, num_cpus: int) -> None:
                         f"idle_pct={round(100.0*counts[c].get(PP_IDLE_ID,0)/total,1)}"])
 
 
+SCHED_SAMPLES = 512   # per-level capture depth (must match workload_schedsweep.c)
+
+
+def schedsweep_test(ocd: OCD, symbols: dict[str, int]) -> list[tuple[int, list[int]]]:
+    bp_done  = symbols["ktrace_bp_sched_sweep_done"]
+    bp_fault = symbols["fault_trap"]
+
+    # Firmware is parked on bp_persist_done. Free the breakpoints behind us (A9 6-cap)
+    # and arm the schedsweep-done bp.
+    for name in ("ktrace_bp_persist_ready", "ktrace_bp_persist_done"):
+        if symbols.get(name):
+            ocd.remove_hw_breakpoint(symbols[name])
+    ocd.add_hw_breakpoint(bp_done)
+
+    # The sweep runs 7 levels x 512 ticks autonomously (~a few seconds). Poll rather
+    # than one long wait_halt.
+    ocd.continue_from_breakpoint()
+    deadline = time.time() + 90.0
+    while True:
+        time.sleep(2.0)
+        ocd.halt()
+        pc = ocd.pc()
+        if pc == bp_done:
+            break
+        if pc == bp_fault:
+            raise RuntimeError(ocd.diagnose())
+        if time.time() > deadline:
+            raise RuntimeError(f"schedsweep stalled, pc=0x{pc:08x}:\n{ocd.diagnose()}")
+        ocd.resume()
+
+    n      = min(ocd.read_u32(symbols["g_schedsweep_n"]), 32)
+    levels = ocd.read_words(symbols["g_schedsweep_levels"], n)
+    counts = ocd.read_words(symbols["g_schedsweep_counts"], n)
+    base   = symbols["g_schedsweep_samples"]
+
+    rows: list[tuple[int, list[int]]] = []
+    for i in range(n):
+        c = min(counts[i], SCHED_SAMPLES)
+        samples = ocd.read_words(base + i * SCHED_SAMPLES * 4, c) if c else []
+        rows.append((levels[i], samples))
+
+    print("\nscheduler overhead vs loaded tasks (per-tick next_thread, cycles):")
+    for N, samples in rows:
+        s = dist_stats(samples)
+        print(f"  N={N:<3} n={int(s['count']):<4} min={int(s['min']):<5} mean={s['mean']:<7.1f} "
+              f"p50={int(s['p50']):<5} p99={int(s['p99']):<5} max={int(s['max'])}")
+    return rows
+
+
+def write_schedsweep_csv(path: Path, rows: list[tuple[int, list[int]]]) -> None:
+    # plot_latency_ranges.py input format: one distribution row per task count.
+    with path.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["distribution", "count", "min", "mean", "p50", "p99", "max", "unit"])
+        for N, samples in rows:
+            s = dist_stats(samples)
+            w.writerow([f"{N} tasks", int(s["count"]), int(s["min"]), round(s["mean"], 1),
+                        int(s["p50"]), int(s["p99"]), int(s["max"]), "cycles"])
+
+
 def write_artifacts(outdir: Path, alloc_metrics: list[Metric], edf_results: list[EDFResult],
                     traces: dict[int, bytes], periods: tuple[int, ...],
                     cpu1_traces: dict[int, bytes] | None = None,
@@ -1582,6 +1642,7 @@ def main(bootable: bool = False) -> None:
     micro: MicroResult | None = None
     suspend: SuspendResult | None = None
     persist: PersistResult | None = None
+    sched_rows = None
 
     outdir = RESULTS_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1631,6 +1692,8 @@ def main(bootable: bool = False) -> None:
             micro = micro_test(ocd, symbols)
             suspend = suspend_test(ocd, symbols)
             persist = persistent_test(ocd, symbols, num_cpus)
+            if symbols.get("ktrace_bp_sched_sweep_done"):
+                sched_rows = schedsweep_test(ocd, symbols)
         except KeyboardInterrupt:
             # Ctrl-C usually means the run hung -- dump where both cores are stuck
             # (+ any fault record) before the socket closes. fault_addr/num_cpus are
@@ -1684,6 +1747,15 @@ def main(bootable: bool = False) -> None:
     if persist is not None:
         write_persistent_csv(outdir / "persistent.csv", persist, num_cpus)
         plot_persistent(persist, outdir / "persistent.png", num_cpus)
+    if sched_rows:
+        write_schedsweep_csv(outdir / "schedsweep.csv", sched_rows)
+        try:
+            subprocess.run([sys.executable, str(ROOT / "scripts" / "plot_latency_ranges.py"),
+                            str(outdir / "schedsweep.csv"), str(outdir / "schedsweep.png"),
+                            "Scheduler overhead vs loaded task count (per-tick next_thread, cycles)"],
+                           check=True)
+        except Exception as e:
+            print(f"(schedsweep plot skipped: {e})")
     print(f"\nPASS   artifacts in {outdir}")
 
 

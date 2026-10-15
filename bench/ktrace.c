@@ -122,6 +122,18 @@ void ktrace_bp_persist_done(void)
 }
 
 
+KTRACE_BP_ATTR
+void ktrace_bp_sched_sweep_done(void)
+{
+    __asm__ __volatile__(
+        "nop"
+        :
+        :
+        : "memory"
+    );
+}
+
+
 void ktrace_wait_release(void)
 {
     g_test_release = 0u;

@@ -61,6 +61,7 @@ CORE := \
 	bench/workload_persistent.c \
 	bench/workload_allocsweep.c \
 	bench/workload_fragsweep.c \
+	bench/workload_schedsweep.c \
 	kernel/mutex.s \
 
 
