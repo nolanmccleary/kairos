@@ -372,8 +372,66 @@ Acknowledging a tick is therefore two levels. The asm `_irq_handler` first calls
 
 
 
-### PMU
+### Schedulability Bounds
+
+Kairos' utilization tracking and load-balancing systems are [based on this paper](https://www.cis.upenn.edu/~lee/07cis505/Lec/liu73scheduling.pdf), which proves the Liu and Layland EDF Schedulability guarantee for single core processors. Math summary:
 
 
+The model is the usual one: $m$ independent periodic tasks, where task $i$ releases a job every $T_i$ ticks, each job needs $C_i$ ticks of compute, the deadline is the end of the period ($D_i = T_i$), and the processor is single-core and preemptive. Define the **processor utilization** as the fraction of time the tasks demand:
+
+$$U = \sum_{i=1}^{m} \frac{C_i}{T_i}$$
+
+The paper's deadline-driven scheduling algorithm is just EDF: at any instant, run the released job whose deadline is nearest. Liu and Layland's result (their Theorem 7) is that this is an exact, tight test:
+
+$$\text{EDF is feasible} \iff U = \sum_{i=1}^{m} \frac{C_i}{T_i} \le 1$$
+
+In other words the least upper bound on utilization is a full **100%** — EDF can use every spare cycle. The two directions are both easy to see over one hyperperiod $H = T_1 T_2 \cdots T_m$:
+
+- **Necessity.** In $H$ ticks task $i$ releases $H/T_i$ jobs, so the total compute demanded is $\sum_i \frac{H}{T_i} C_i = H \cdot U$. If $U > 1$ that demand exceeds the $H$ ticks available, so *no* algorithm can meet every deadline.
+- **Sufficiency.** Their Theorem 6 shows EDF never leaves the processor idle before a missed deadline (an "overflow"). So if any idle time exists, which it must when $U \le 1$, since demand $H \cdot U \le H$, there can be no overflow, and every deadline is met.
+
+
+This also makes EDF **optimal**: if a task set is schedulable by any algorithm at all, it is schedulable by EDF. Contrast this with a fixed-priority scheme like rate-monotonic (where we run the next ready task with the shortest period), whose guaranteed bound (also from this paper) is only
+
+$$U \le m\left(2^{1/m} - 1\right) \xrightarrow{m \to \infty} \ln 2 \approx 0.693$$
+
+so RMS can be forced to miss deadlines at ~69% load (nice) while EDF is still fine. As long as a core stays at or below $U = 1$ it is provably schedulable, and the headroom $1 - U$ is the slack the round-robin persistent threads and any new periodic tasks get to run in. Note that at $U = 1$ EDF still meets every deadline, however there is zero slack here and we should avoid this state at all costs.
+
+We can also just watch the bound assert itself on real hardware. The EDF test sweeps a three-task set from light load up past saturation and counts deadline misses at each configured utilization $U = \sum_i C_i/T_i$:
+
+![EDF schedulability: deadline misses vs configured utilization, showing the crossover at U = 1](figures/edf_crossover.png)
+
+The taskset runs completely clean up to $U \approx 0.99$ and only begins missing right as $U$ reaches 1. This is exactly where Theorem 7 says it should. We see some misses appear *below* $U = 1$. These are the cost of running on a real chip: scheduler overhead, cache jitter, and the integer rounding of each $C_i$ eat the last percent of slack, so the practical knee sits just under the ideal bound. Past $U = 1$ the misses explode, because now the demand genuinely exceeds what the core can deliver.
+
+Speaking of jitter, here are some figures detailing the IRQ latency and context switch cost:
+
+![IRQ dispatch latency: cycles from the GIC SGI trigger to the ISR body](figures/irqlat_latency.png)
+
+![Context-switch cost in next_thread(): a full switch to a different task vs a resume of the same task](figures/ctxsw_latency.png)
+
+The A9 here runs at 800 MHz (the Main PLL VCO is 1.6 GHz and the MPU clock is half of that; you can double-check this against the tick — the global timer runs at a quarter of the MPU clock, 200 MHz, and `AUTOINC = 199999` gives one IRQ every 200000 of its counts, i.e. 1 kHz), so each cycle is 1.25 ns and we can put real time on these numbers.
+
+IRQ dispatch — the gap from the timer interrupt firing to the first instruction of the handler body — sits at 166 cycles median (~0.21 µs), with essentially everything inside 161–173 cycles and the single worst sample over 1024 trials at 232 cycles (~0.29 µs). The context switch inside `next_thread()` splits into two cases. A *resume*, where the same task keeps running and we only re-validate and return, costs ~730 cycles median (~0.91 µs). A full *switch* to a different task — which saves and restores the entire integer register file through the manual exception frame described above — costs ~1140 cycles median (~1.43 µs), tailing to 1627 cycles (~2.03 µs) in the worst case.
+
+For real-time work the number that matters isn't the median, it's the spread, because jitter is what turns "finishes in time" into "sometimes misses." Here the spread is tight and bounded: IRQ dispatch varies by ~70 cycles (~90 ns) across its whole range, the switch by ~550 cycles (~0.7 µs), and both have short tails rather than fat ones. Against the 1 ms scheduler tick (200000 cycles) the worst-case switch is 0.8% of a tick and the worst-case IRQ dispatch is 0.12%. For periodic control/DSP work in the kHz range — which is exactly what this is for — the per-event jitter sits three to four orders of magnitude below the deadline. Even a 10 kHz loop (100 µs period) only spends ~2% of its period on a worst-case switch.
+
+So how does that stack up? FreeRTOS on a Cortex-M quotes ~86 cycles for its context switch in its own FAQ, and independent measurements land around [~220 cycles on a Cortex-M4](https://www.researchgate.net/figure/Time-for-FreeRTOS-task-context-switching-on-STM32F407IG-ARM-Cortex-M4-for_fig2_325358846). In cycles that makes our ~1140 look terrible — but cycles aren't comparable across these parts, time is. A Cortex-M4 clocks at ~100–180 MHz, so ~86–220 cycles is ~0.5–1.3 µs of wall-clock, i.e. the *same* ballpark as our ~1.43 µs, except we're paying it on a dual-core A9 that drags caches, an MMU, and SMP coherence along and saves the full register file by hand. In absolute time we're basically even with the Cortex-M RTOS everyone benchmarks against. The one place the Cortex-M flatly wins is interrupt *entry*: its NVIC reaches the ISR in a hardware-fixed 12 cycles (~70 ns) with zero jitter, where our GIC path is ~0.21 µs with a small tail — the GIC is simply a larger, more general piece of machinery than a tightly-coupled NVIC.
+
+The verdict: for the firm/soft real-time periodic workloads this targets, the jitter is comfortably sufficient — negligible against millisecond-scale deadlines, and competitive in absolute time with FreeRTOS on a Cortex-M, which is a genuinely surprising result for a chip supposedly unfit for real-time. Where it would fall short is sub-microsecond *hard* determinism: tight interrupt-to-pin response or MHz-rate edges, where the GIC tail and cache jitter matter and a bare Cortex-M (or the FPGA fabric) is the right tool, which is exactly the work you'd want to keep off the A9 anyway. 
+
+
+
+
+
+
+During SMP, the load balancer tracks utilization and assigns new periodic tasks to whichever core has lower utilization at that time. An EMA filter is used on the utilization calculations in order to provide a less volatile estimate. Persistent task may also be pinned to whichever core has lower utilization (as well as arbitrarily if desired) but they do not contribute to the utilization estimate themselves. The mechanics above lead to the following two important points:
+
+1. If overall per-core utilization goes over 1.0, the system is unpredicatable
+
+2. If persistent tasks are not pinned wisely or the cores are otherwise very high-u they may be starved.
+
+As such, it's recommended that periodic tasks be written in much the same way as periodic ISR code such that only the minimum amount of computation needed lives inside the periodic task and the period provides an ample degree of slack. For realistic workloads this is generally very doable. 
+
+We use the Performance Monitoring Unit (PMU) to keep track of cycles, here is a figure:
 
 

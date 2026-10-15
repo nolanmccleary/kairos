@@ -190,19 +190,15 @@ static void build_tables(void)
     uint32_t sdram_hs_start = (uint32_t)(uintptr_t)_host_shared_sdram_start;
     uint32_t sdram_hs_end   = (uint32_t)(uintptr_t)_host_shared_sdram_end;
 
-#if ENABLE_ICACHE
     uint32_t delegated_block = (uint32_t)(uintptr_t)_ocram_origin >> L1_BLOCK_ADDR_SHIFT;
-#endif
 
     /* Map each block directly: SDRAM cacheable, the SDRAM telemetry block Device,
        every block beyond DDR Device. */
     for (uint32_t l1_block = 0; l1_block < L1_BLOCK_COUNT; l1_block++)
     {
 
-#if ENABLE_ICACHE
         if (l1_block == delegated_block)
             continue;                 /* handled by the L2 delegation below, not here */
-#endif
 
         uint32_t l1_block_base  = l1_block << L1_BLOCK_ADDR_SHIFT;
         bool     in_sdram       = (l1_block < sdram_block_count);
@@ -216,7 +212,6 @@ static void build_tables(void)
     l1_table[0] = 0u;
 #endif
 
-#if ENABLE_ICACHE
     /* Fill the L2 table for the delegated block (0xFFF00000..0xFFFFFFFF, which holds
        the boot ROM, GIC/timer, and OCRAM). Rule: ALL of OCRAM (>= _ocram_origin) is
        Normal-cacheable -- text/data/bss/stacks -- EXCEPT the host_ocram island, which
@@ -244,7 +239,6 @@ static void build_tables(void)
     }
 
     l1_table[delegated_block] = (uint32_t)(uintptr_t)_l2_table_base | L1_ENTRY_POINT_TO_L2;
-#endif
 #endif  /* BOARD == BOARD_QEMU / else */
 #endif  /* ENABLE_MMU */
 
