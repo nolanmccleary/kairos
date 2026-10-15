@@ -1,0 +1,6 @@
+distribution,count,min,mean,p50,p99,max,unit
+sdram_read,8192,115,127.1,117,353,429,cycles
+sdram_write,8192,74,74.7,74,76,80,cycles
+ocram_read,8192,73,73.0,73,73,73,cycles
+ocram_write,8192,81,82.0,82,82,82,cycles
+baseline_cycles,37

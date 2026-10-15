@@ -59,6 +59,8 @@ CORE := \
 	bench/workload_micro.c \
 	bench/workload_suspend.c \
 	bench/workload_persistent.c \
+	bench/workload_allocsweep.c \
+	bench/workload_fragsweep.c \
 	kernel/mutex.s \
 
 
@@ -112,8 +114,25 @@ CFLAGS := \
 	-Wa,--defsym,BOARD_IS_QEMU=$(BOARD_IS_QEMU)
 
 
+# FreeRTOS binary (NON-default). Only `make FREERTOS=1 ...` pulls in any FreeRTOS code
+# or its separate linker fragment; the normal build and de1-soc.ld carry no FreeRTOS
+# references. USE_FREERTOS switches the appcode (main.c) to the allocator sweep only and
+# points workload_allocsweep.c at pvPortMalloc/vPortFree instead of kMalloc/kFree.
+FREERTOS ?= 0
+LDSCRIPT_FLAGS := -T $(LDSCRIPT)
+ifeq ($(FREERTOS),1)
+  CORE += freertos_port/FreeRTOS-Kernel/portable/MemMang/heap_4.c \
+          freertos_port/freertos_heap_shim.c
+  CFLAGS += -DUSE_FREERTOS=1 \
+            -Ifreertos_port/libc_shim -Ifreertos_port \
+            -Ifreertos_port/FreeRTOS-Kernel/include \
+            -Ifreertos_port/FreeRTOS-Kernel/portable/GCC/ARM_CA9
+  LDSCRIPT_FLAGS := -Wl,-dT,$(LDSCRIPT) -Wl,-T,linker/freertos_heap.ld
+endif
+
+
 LDFLAGS := \
-	-T $(LDSCRIPT) \
+	$(LDSCRIPT_FLAGS) \
 	-Wl,--build-id=none \
 	-Wl,--gc-sections \
 	-Wl,-Map=build/test.map \

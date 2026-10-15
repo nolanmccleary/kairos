@@ -575,6 +575,63 @@ def _write_micro_csv(path: Path, rows: Sequence[tuple[str, Sequence[int]]], extr
 
 
 # --- plots ------------------------------------------------------------------
+@dataclass(frozen=True)
+class Sweep:
+    x:     tuple[int, ...]       # x-axis: payload size (bytes) or free-list length (holes)
+    alloc: tuple[Metric, ...]    # per x: alloc cost distribution (cycles)
+    free:  tuple[Metric, ...]    # per x: free cost distribution (cycles)
+
+
+def collect_sweep(ocd: OCD, symbols: dict[str, int],
+                  n_sym: str, x_sym: str, alloc_sym: str, free_sym: str) -> Sweep:
+    # Generic alloc/free sweep reader. Identical symbol layout in the normal (TLSF) and
+    # FreeRTOS (heap_4) binaries, so test.py and test_freertos.py share it.
+    n = min(ocd.read_u32(symbols[n_sym]), 64)
+    x = tuple(ocd.read_words(symbols[x_sym], n))
+    alloc = tuple(read_metric(ocd, symbols[alloc_sym], i) for i in range(n))
+    free  = tuple(read_metric(ocd, symbols[free_sym], i) for i in range(n))
+    return Sweep(x, alloc, free)
+
+
+def write_sweep_csv(path: Path, sweep: Sweep, xname: str) -> None:
+    with path.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([xname, "alloc_mean", "alloc_min", "alloc_max",
+                    "free_mean", "free_min", "free_max", "unit"])
+        for i, xv in enumerate(sweep.x):
+            a, fr = sweep.alloc[i], sweep.free[i]
+            w.writerow([xv, a.mean, a.minimum, a.maximum, fr.mean, fr.minimum, fr.maximum, "cycles"])
+
+
+def plot_sweep(sweep: Sweep, path: Path, title: str, xlabel: str) -> None:
+    # alloc and free cost vs the swept x (mean line + min as the clean lower bound).
+    # Log-2 x since both sweeps are geometric.
+    x = sweep.x
+    fig, ax = plt.subplots(figsize=(10, 5.2))
+    ax.plot(x, [m.mean for m in sweep.alloc], "o-", color="#1f77b4", label="alloc (mean)")
+    ax.plot(x, [m.minimum for m in sweep.alloc], ":", color="#1f77b4", alpha=0.6, label="alloc (min)")
+    ax.plot(x, [m.mean for m in sweep.free], "s-", color="#2ca02c", label="free (mean)")
+    ax.plot(x, [m.minimum for m in sweep.free], ":", color="#2ca02c", alpha=0.6, label="free (min)")
+    ax.set_xscale("log", base=2)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("cycles")
+    ax.set_title(title)
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+
+
+# per sweep: (n_sym, x_sym, alloc_sym, free_sym, csv_xname, title_suffix, xlabel, file_stem)
+ALLOC_SWEEPS = {
+    "size": ("g_allocsweep_n", "g_allocsweep_sizes", "g_allocsweep_alloc", "g_allocsweep_free",
+             "size_bytes", "vs payload size", "payload size (bytes)", "allocsweep"),
+    "frag": ("g_fragsweep_n", "g_fragsweep_levels", "g_fragsweep_alloc", "g_fragsweep_free",
+             "free_list_len", "vs fragmentation (free-list length)", "free-list length (holes)", "fragsweep"),
+}
+
+
 def plot_alloc(metrics: Sequence[Metric], path: Path) -> None:
     names  = [m.name for m in metrics]
     means  = [m.mean for m in metrics]
@@ -894,8 +951,16 @@ def allocbench(ocd: OCD, symbols: dict[str, int]) -> tuple[list[Metric], dict[st
         "matmul": collect_matmul_samples(ocd, symbols["g_matmul_samples"]),
     }
     print_alloc(metrics)
+
+    # Allocator sweeps: alloc/free cost vs payload size, and vs free-list length. Same
+    # symbols in the FreeRTOS binary (read there by test_freertos.py).
+    sweeps: dict[str, Sweep] = {}
+    for key, (n_sym, x_sym, a_sym, f_sym, *_rest) in ALLOC_SWEEPS.items():
+        if symbols.get(n_sym):
+            sweeps[key] = collect_sweep(ocd, symbols, n_sym, x_sym, a_sym, f_sym)
+
     ocd.remove_hw_breakpoint(bp)   # one-shot; free the HW slot for the micro phase (A9 has 6)
-    return list(metrics), warmup
+    return list(metrics), warmup, sweeps
 
 
 def edf_test(ocd: OCD, symbols: dict[str, int], num_cpus: int,
@@ -1558,8 +1623,9 @@ def main(bootable: bool = False) -> None:
             ocd.write_u32(symbols["g_boot_release"], 1)
 
         # Control panel: comment a phase to skip it (also comment its call in main.c).
+        alloc_sweeps: dict = {}
         try:
-            alloc_metrics, warmup = allocbench(ocd, symbols)
+            alloc_metrics, warmup, alloc_sweeps = allocbench(ocd, symbols)
             edf_results, traces, cpu1_traces = edf_test(ocd, symbols, num_cpus, periods, u_values)
             balance = balance_test(ocd, symbols, num_cpus)
             micro = micro_test(ocd, symbols)
@@ -1578,6 +1644,10 @@ def main(bootable: bool = False) -> None:
             raise SystemExit(130)
 
     write_artifacts(outdir, alloc_metrics, edf_results, traces, periods, cpu1_traces, warmup)
+    for key, sweep in alloc_sweeps.items():
+        _ns, _xs, _as, _fs, xname, title_suf, xlabel, stem = ALLOC_SWEEPS[key]
+        write_sweep_csv(outdir / f"{stem}.csv", sweep, xname)
+        plot_sweep(sweep, outdir / f"{stem}.png", f"Allocator cost {title_suf}: Kairos TLSF", xlabel)
     if balance is not None:
         write_balance_csv(outdir / "balance.csv", balance)
         plot_balance(balance, outdir / "edf_balance.png", num_cpus)
