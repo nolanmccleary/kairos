@@ -1,11 +1,11 @@
-#ifndef __PREEMPT_SCHED_H__
-#define __PREEMPT_SCHED_H__
+/* Kairos scheduler public interface: a hybrid EDF + round-robin policy. */
+#ifndef __SCHED_H__
+#define __SCHED_H__
 
 #include <stdint.h>
 #include "system.h"
 #include "thread.h"
 #include "cpu.h"
-
 
 
 sys_exit_e psched_core_init(void);
@@ -30,5 +30,5 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay);
 void next_thread(void);
 
 
-
 #endif
+

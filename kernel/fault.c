@@ -1,6 +1,6 @@
 #include "fault.h"
 #include "cpu.h"
-#include "boot.h" 
+#include "boot.h"
 
 
 fault_record_t g_fault[NUM_CPUS] __attribute__((section(".fault"), used));
@@ -74,3 +74,4 @@ void fault_halt(void)
 
     for (;;) { }
 }
+

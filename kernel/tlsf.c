@@ -9,10 +9,7 @@
 #include "sched.h"
 
 
-
 mutex_t g_allocator_mutex;
-
-
 
 
 void *memset(void *s, int c, size_t n)   // freestanding build has no libc; sequencer.c and struct inits need it
@@ -23,13 +20,12 @@ void *memset(void *s, int c, size_t n)   // freestanding build has no libc; sequ
 }
 
 
-
 // Our heap is 16MB so 2^24 -> bins 0 through 23; 32 sub-bins, last bin interval (binterval haha) is [2^23, 2^24)
 #define FL_COUNT 24
 #define SL_COUNT 32
 #define LIN 7
 
-#define MIN_PAYLOAD 8     //Bytes needed to store prev and next pointers during free-space representation 
+#define MIN_PAYLOAD 8     //Bytes needed to store prev and next pointers during free-space representation
 
 
 #define INITIAL_FREE (((1<<24) - 8) & ~(0b111)) //Heap size minus the cost of one taken block header
@@ -40,8 +36,6 @@ extern char _heap_start;
 extern char _heap_end;
 
 
-
-
 #define ALIGN8(A) ((A + 0x7) & ~(0b111)) //LDRD/STRD on A9 require 8-byte alignment
 
 #define HEAP_START (ALIGN8(((uintptr_t)&_heap_start)))
@@ -49,12 +43,10 @@ extern char _heap_end;
 #define HEAP_SIZE  (HEAP_END - HEAP_START)
 
 
-
 volatile bool g_heap_initialized;
 
 
-
-typedef struct 
+typedef struct
 {
     uint32_t size : 24;
     uint32_t is_type_free_block : 1;
@@ -79,20 +71,9 @@ typedef struct
 }   taken_block_t;
 
 
-
-
-
-// typedef struct
-// {
-//     free_block_t* head;
-// }   free_list_t;
-
-
-
 static free_block_t* tlsf_array[TLSF_SIZE]; //TODO: Adjust for lin zone optimization
 static uint32_t fBitmap;
 static uint32_t sBitmap[FL_COUNT - (LIN - 1)];
-
 
 
 //IMPORTANT: Undefined behaviour for n=0
@@ -102,15 +83,13 @@ static inline uint32_t leading_one(uint32_t n)
 }
 
 
-
-
 //Given a size, this function returns the appropriate bin and sub_bin mappings
 static inline allocator_op_e map_up(size_t size, uint32_t* bin_idx, uint32_t* sub_idx)
 {
     if (size <= MIN_PAYLOAD) // [8,12) = tlsf[2]
     {
         *bin_idx = 6;
-        *sub_idx = 2; 
+        *sub_idx = 2;
         return ALLOC_OP_OK;
     }
 
@@ -165,7 +144,6 @@ static inline allocator_op_e map_up(size_t size, uint32_t* bin_idx, uint32_t* su
 }
 
 
-
 static inline free_block_t* get_free(size_t size)
 {
     if (size == 0) return NULL;
@@ -178,7 +156,7 @@ static inline free_block_t* get_free(size_t size)
         uint32_t fCopy = fBitmap >> fShift;
         bool tick = true;
 
-        while (fCopy > 0) 
+        while (fCopy > 0)
         {
             if(fCopy & 1U) //Bin has a free sub-bin
             {
@@ -199,10 +177,9 @@ static inline free_block_t* get_free(size_t size)
             fShift++;
         }
     }
-     
+
     return NULL;
 }
-
 
 
 static inline size_t map_down(size_t size, uint32_t* fBit, uint32_t* sBit, uint32_t* sBitInd) //Returns a TLSF array index given a free block size and sets bitmaps
@@ -233,7 +210,6 @@ static inline size_t map_down(size_t size, uint32_t* fBit, uint32_t* sBit, uint3
 
     return (leader - (LIN - 1)) * SL_COUNT + sb;
 }
-
 
 
 void* kMalloc(size_t size)
@@ -302,7 +278,7 @@ void* kMalloc(size_t size)
             next->prev = prev;
         }
 
-        if (tlsf_array[obin] == NULL) 
+        if (tlsf_array[obin] == NULL)
         {
             sBitmap[osBitInd] &= ~osBit;
             if (sBitmap[osBitInd] == 0) fBitmap &= ~ofBit;
@@ -314,8 +290,6 @@ void* kMalloc(size_t size)
 
     return NULL;
 }
-
-
 
 
 allocator_op_e kFree(void* target)
@@ -372,7 +346,7 @@ allocator_op_e kFree(void* target)
         curr = (taken_block_t*)prev_phys;
         prev_phys = (free_block_t*)curr->prev_phys;
     }
-    
+
 
     free_block_t* next_phys = (free_block_t*)((char*)target + init_size);
 
@@ -441,8 +415,6 @@ allocator_op_e kFree(void* target)
 }
 
 
-
-
 allocator_op_e heap_init(void)
 {
     if (!g_heap_initialized)
@@ -470,7 +442,7 @@ allocator_op_e heap_init(void)
         sBitmap[FL_COUNT-LIN] = 1U << (SL_COUNT-1U);
 
         g_heap_initialized = true;
-        
+
         return ALLOC_OP_OK;
     }
 
@@ -478,15 +450,13 @@ allocator_op_e heap_init(void)
 }
 
 
-
-
 allocator_op_e heap_destroy(void)
 {
     if (g_heap_initialized)
     {
-        
+
         g_cpus[CPU0].sched_init = false;
-#if ENABLE_SMP == 1 
+#if ENABLE_SMP == 1
         g_cpus[CPU1].sched_init = false;
 #endif
 
@@ -499,7 +469,7 @@ allocator_op_e heap_destroy(void)
         }
 
         fBitmap = 0;
-        
+
         for (i = 0; i < FL_COUNT - (LIN - 1U); i++)
         {
             sBitmap[i] = 0;
@@ -514,8 +484,6 @@ allocator_op_e heap_destroy(void)
 }
 
 
-
-
 allocator_op_e heap_reset(void)
 {
     if (g_heap_initialized)
@@ -527,3 +495,4 @@ allocator_op_e heap_reset(void)
 
     return ALLOC_OP_FAIL;
 }
+

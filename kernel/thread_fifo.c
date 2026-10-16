@@ -2,14 +2,10 @@
 #include "tlsf.h"
 
 
-
-
-
 inline size_t inc_wrap(size_t n)
 {
     return (n + 1) % MAX_THREADS;
 }
-
 
 
 void initialize_fifo(thread_fifo_t* fifo)
@@ -33,7 +29,7 @@ void destroy_threads(thread_fifo_t* fifo)
     fifo->end = 0;
     fifo->size = 0;
 
-    return; 
+    return;
 }
 
 
@@ -64,3 +60,4 @@ thread_t* fifo_pop(thread_fifo_t* fifo)
 
     return NULL;
 }
+

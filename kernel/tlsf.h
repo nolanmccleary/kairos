@@ -5,9 +5,7 @@
 #include "lock.h"
 
 
-
-
-typedef enum 
+typedef enum
 {
     ALLOC_OP_OK,
     ALLOC_OP_FAIL,
@@ -25,3 +23,4 @@ void*           kMalloc(size_t size);
 allocator_op_e  kFree(void* target);
 
 #endif
+

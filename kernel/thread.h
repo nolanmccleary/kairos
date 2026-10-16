@@ -16,14 +16,11 @@
 #define PERSISTENT_SLICE_TICKS 200
 
 
-
-
 typedef enum
 {
     CPU0 = 0,
     CPU1 = 1,
 }   cpu_core_e;
-
 
 
 typedef enum
@@ -34,7 +31,6 @@ typedef enum
 }   thread_status_e;
 
 
-
 typedef enum
 {
     APERIODIC,
@@ -43,7 +39,7 @@ typedef enum
 }   thread_periodicity_e;
 
 
-typedef enum 
+typedef enum
 {
     LOW_PRIORITY,
     MED_PRIORITY,
@@ -51,8 +47,7 @@ typedef enum
 }   persistent_thread_priority_e;
 
 
-
-typedef enum 
+typedef enum
 {
     INCOMING_THREADS,
     OUTGOING_THREADS,
@@ -74,7 +69,7 @@ typedef struct
 }   thread_metadata_t;
 
 
-typedef struct 
+typedef struct
 {
     uint32_t period;
     uint32_t release_time;
@@ -82,7 +77,6 @@ typedef struct
     uint32_t ticks_landed;
     bool dirty;
 }   thread_timing_t;
-
 
 
 typedef struct
@@ -98,8 +92,6 @@ typedef struct
 
     uint32_t prev_u;
 }   metrics_t;
-
-
 
 
 //TODO: Pack this better
@@ -120,7 +112,6 @@ typedef struct __attribute__((aligned(8))) //Stack should start 8-aligned
 }   thread_t;
 
 
-
 void init_metrics(thread_t* thread);
 
 void switch_in(thread_t* thread);
@@ -128,3 +119,4 @@ void switch_out(thread_t* thread);
 
 
 #endif
+

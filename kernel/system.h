@@ -2,8 +2,6 @@
 #define __SYSTEM_H_
 
 
-
-
 typedef enum
 {
     SYS_OK,
@@ -11,6 +9,5 @@ typedef enum
 }   sys_exit_e;
 
 
-
-
 #endif
+

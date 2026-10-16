@@ -11,7 +11,6 @@ HOST_SHARED_OCRAM volatile uint32_t g_cpu_mailbox_uncached;
 cpu_t g_cpus[NUM_CPUS];
 
 
-
 inline cpu_core_e curr_core(void)
 {
     uint32_t mpidr;
@@ -24,8 +23,6 @@ inline void update_cpu_scheduler_overhead(cpu_core_e cpu, uint32_t overhead)
 {
     g_cpus[cpu].avg_scheduler_overhead = overhead - (overhead >> ALPHA) + (g_cpus[cpu].avg_scheduler_overhead >> ALPHA);
 }
-
-
 
 
 void update_utilization(thread_t* thread)
@@ -42,7 +39,6 @@ void update_utilization(thread_t* thread)
 }
 
 
-
 inline void send_cpu_interrupt(cpu_sgi_e interrupt)
 {
     cpu_core_e core = curr_core();
@@ -50,3 +46,4 @@ inline void send_cpu_interrupt(cpu_sgi_e interrupt)
     GICD_SGIR = (1u << (16u + (core ^ 0x1u)))   // CPUTargetList [23:16]: the other core
               | ((uint32_t)interrupt & 0xFu);    // SGI ID [3:0]
 }
+

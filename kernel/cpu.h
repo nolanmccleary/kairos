@@ -13,11 +13,8 @@
 #if ENABLE_SMP == 1
 #define NUM_CPUS 2
 #else
-#define NUM_CPUS 1 
+#define NUM_CPUS 1
 #endif
-
-
-
 
 
 typedef struct
@@ -44,13 +41,12 @@ typedef struct
 
     thread_fifo_t* incoming_threads;
     thread_fifo_t* outgoing_threads;
-    
+
 }   cpu_t;
 
 
 extern volatile uint32_t g_cpu_mailbox_uncached;
 extern cpu_t g_cpus[NUM_CPUS];
-
 
 
 cpu_core_e curr_core(void);

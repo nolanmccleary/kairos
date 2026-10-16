@@ -25,6 +25,5 @@ static inline bool lt_wrapped(uint32_t a, uint32_t b)
 }
 
 
-
-
 #endif
+

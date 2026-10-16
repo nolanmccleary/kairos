@@ -1,8 +1,6 @@
 #include "timers.h"
 
 
-
-
 void cpu0_timer_start(void)
 {
     GTIMER_CTRL    = 0;

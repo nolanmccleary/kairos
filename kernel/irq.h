@@ -19,8 +19,7 @@ typedef union
 }       gicd_sgir_t;
 
 
-
-typedef enum 
+typedef enum
 {
     CPU_PSCHED_INIT_REQUEST,
     CPU_PSCHED_INIT_ACK,
@@ -31,15 +30,10 @@ typedef enum
 }   cpu_sgi_e;
 
 
-typedef enum 
+typedef enum
 {
     GICD_IRQ = 0x1b,
 }   hardware_irq_e;
-
-
-
-
-
 
 
 #endif

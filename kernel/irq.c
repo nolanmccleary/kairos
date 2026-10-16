@@ -7,7 +7,6 @@
 #include "ktrace.h"
 
 
-
 void c_irq_handler(int id)
 {
     /* GICC_IAR carries the source CPUID in bits [12:10] for SGIs; strip it so a

@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 
-
 void pmu_init(void);
 
 
@@ -21,3 +20,4 @@ static inline uint32_t pmu_cycles(void)
 
 
 #endif
+

@@ -4,15 +4,13 @@
 #include "thread.h"
 
 
-
-
 static inline int find_parent_index(int pos)
 {
     if (pos == 0) return 0;
     else return (pos-1) / 2;
 }
 
-static inline int find_left_child(int pos)                                                                
+static inline int find_left_child(int pos)
 {
     return pos * 2 + 1;
 }
@@ -34,7 +32,7 @@ static inline void percolate_up(heap_t* heap, int index)
     int parent_index = find_parent_index(index);
 
     if((index == 0) || geq_wrapped(heap->heap[index].order, heap->heap[parent_index].order)) return;
-    
+
     else
     {
         heap_node_t tmp = heap->heap[index];
@@ -45,7 +43,7 @@ static inline void percolate_up(heap_t* heap, int index)
         heap->heap[parent_index].thread->md.heap_index = parent_index;
 
         return percolate_up(heap, parent_index);
-    }       
+    }
 }
 
 
@@ -53,7 +51,7 @@ static inline void percolate_down(heap_t* heap, int index)
 {
     int left_child_index = find_left_child(index);
     int right_child_index = find_right_child(index);
-    
+
     bool swappable = false;
     bool swappable_right = false;
 
@@ -102,7 +100,7 @@ static inline void percolate_down(heap_t* heap, int index)
 
 heap_op_e insert_node(heap_t* heap, thread_t* thread, uint32_t order)
 {
-    
+
     if (heap->curr_index < MAX_THREADS)
     {
         heap_node_t node;
@@ -135,7 +133,6 @@ heap_op_e remove_head(heap_t* heap)
 }
 
 
-
 heap_op_e remove_node(heap_t* heap, size_t index)
 {
     if (heap->curr_index > 0)
@@ -166,8 +163,6 @@ heap_op_e balance_node(heap_t* heap, size_t index, uint32_t order)
 
     else return OP_FAILED;
 }
-
-
 
 
 heap_op_e pop_heap(heap_t* heap, thread_t** thread)

@@ -1,7 +1,6 @@
 #include "gic.h"
 
 
-
 void cpu0_gic_init(void)
 {
     GICD_CTLR       = 1;

@@ -38,9 +38,9 @@ mutex_lock_e lock_mutex_timeout(mutex_t* mutex, uint32_t timeout)
 }
 
 
-
 void unlock_mutex(mutex_t* mutex)
 {
     _unlock_mutex(mutex);
     (void)(0);
 }
+

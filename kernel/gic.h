@@ -19,3 +19,4 @@ void cpu1_gic_init(void);
 
 
 #endif
+

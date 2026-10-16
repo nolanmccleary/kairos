@@ -19,13 +19,13 @@ typedef enum
 typedef struct
 {
     uint32_t magic;
-    uint32_t vec;  
-    uint32_t pc;   
-    uint32_t spsr; 
-    uint32_t dfsr; 
-    uint32_t dfar; 
-    uint32_t ifsr; 
-    uint32_t ifar; 
+    uint32_t vec;
+    uint32_t pc;
+    uint32_t spsr;
+    uint32_t dfsr;
+    uint32_t dfar;
+    uint32_t ifsr;
+    uint32_t ifar;
 }   fault_record_t;
 
 extern fault_record_t g_fault[NUM_CPUS];
@@ -50,3 +50,4 @@ void raise_error(const char* message);
 void raise_error_ctx(const char* message, uint32_t ctx);
 
 #endif
+

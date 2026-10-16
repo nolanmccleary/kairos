@@ -3,8 +3,6 @@
 #include "aux.h"
 
 
-
-
 void init_metrics(thread_t* thread)
 {
     thread->metrics = (metrics_t){0};
@@ -35,7 +33,7 @@ void switch_in(thread_t *thread)
 
 
         case FINISHED: //should never switch in in this state
-        default: 
+        default:
             break;
     }
 
@@ -43,11 +41,10 @@ void switch_in(thread_t *thread)
 }
 
 
-
 void switch_out(thread_t* thread)
 {
     uint32_t curr_cyles = pmu_cycles();
-    thread->metrics.delta_sum += curr_cyles - thread->metrics.prev_cycles; 
+    thread->metrics.delta_sum += curr_cyles - thread->metrics.prev_cycles;
 
     switch (thread->md.status)
     {
@@ -60,7 +57,7 @@ void switch_out(thread_t* thread)
             thread->metrics.ci_av = thread->metrics.ci_av - (thread->metrics.ci_av >> ALPHA) + (ci >> ALPHA);
             break;
 
-        default: 
+        default:
             break;
     }
 }

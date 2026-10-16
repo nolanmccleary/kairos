@@ -9,9 +9,6 @@
 #define PMCNTEN_CCNT (1u << 31)
 
 
-
-
-
 void pmu_init(void)
 {
     uint32_t v;
@@ -28,3 +25,4 @@ void pmu_init(void)
 
     __asm__ __volatile__("isb" ::: "memory");
 }
+
