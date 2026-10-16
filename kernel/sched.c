@@ -27,10 +27,6 @@ static thread_fifo_t med_fifos[NUM_CPUS];
 static thread_fifo_t high_fifos[NUM_CPUS];
 
 
-/* The tick handler runs the scheduler in IRQ mode in BOTH builds: the IRQ path enters it
- * directly, and the FIQ path (kernel.s _fiq_handler) drops from FIQ to IRQ mode before the
- * C runs, specifically so r8-r12 are the common bank, not the FIQ bank. So these SP macros
- * always return to IRQ mode (0x12) after touching the SYS sp. */
 #define SCHED_HANDLER_MODE "0x12"
 
 #define SAVE_SYS_SP(dst)                           \
@@ -707,12 +703,6 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
 
         char* new_sp = g_cpus[core].curr_thread->sp;
 
-        /* The scheduler is now mid-switch: curr_thread points at the next thread while sp_sys
-         * is still this one's. The mutex guarded that up to here, but it has to be released
-         * before we leave (the next thread needs it) and we never return to unlock later. So
-         * fence the tick across the unlock -> frame-switch window; the RFEFD inside
-         * SWITCH_FRAME_AND_RETURN restores the next thread's cpsr, re-enabling it. This is the
-         * same protection thread_exit gets from its leading cpsid. */
         __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
         unlock_mutex(&(g_cpus[core].thread_mutex));
 

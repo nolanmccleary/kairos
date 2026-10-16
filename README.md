@@ -5,8 +5,7 @@ DE1-SoC (Cyclone V). Dual-core SMP, a hybrid Earliest-Deadline-First + round-rob
 scheduler, a TLSF allocator, and its own boot path (no U-Boot, no Linux) that runs from
 on-chip RAM and boots off a microSD card.
 
-This README is a build-and-run guide written by Claude. For the design writeup (why EDF, the boot sequence,
-the scheduler internals, and the benchmark results), or to simply read human writing, see [`writeup.md`](writeup.md).
+This README gives a basic build and run overview. For more in-depth architectural details please see [`writeup.md`](writeup.md).
 
 
 

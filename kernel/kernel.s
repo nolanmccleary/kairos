@@ -339,10 +339,7 @@ _irq_handler:
     cps #0x1f @; Change Processor State --- switch to system mode
     cpsid i @; Change Processor State Interrupt Disable --- no nested interrupts for now
 
-    push {r0-r12} @; store the FULL integer register file. A context switch resumes a
-                  @; DIFFERENT task, so r4-r11 (callee-saved, live across the interrupted
-                  @; task's calls) must be part of the saved context -- saving only the
-                  @; AAPCS caller-saved set corrupts a resumed task's r4-r11.
+    push {r0-r12} 
 
     push {lr} @; push lr_sys onto sysmode stack
 
@@ -358,10 +355,7 @@ _irq_handler:
 
     pop {r0-r12} @; restore the FULL integer register file for the resumed task
 
-    @; NOTE: do NOT re-enable IRQs here. RFEFD restores CPSR (with the thread's
-    @; I-bit) atomically with the PC. A `cpsie i` before RFEFD opens a re-entrancy
-    @; window: a tick firing in these last instructions re-enters _irq_handler on
-    @; the already-restored outgoing SP and corrupts the scheduler state.
+
     RFEFD sp! @; Set PC and CPSR (re-enables IRQs via restored SPSR)
 
 
@@ -380,9 +374,7 @@ _fiq_handler:
     cpsid if @; no nested IRQ or FIQ inside the handler
     push {r0-r12} @; FULL integer file (a switch resumes a DIFFERENT task)
     push {lr} @; lr_sys
-    cps #0x12 @; run the scheduler in IRQ mode, NOT FIQ mode: r8-r12 are then the common
-              @; bank (not the FIQ bank) so the C scheduler, compiled for common registers,
-              @; is correct. sp_irq is free under USE_FIQ since no interrupt uses the IRQ line.
+    cps #0x12 
     BL _identify_and_clear_source
     BL c_fiq_handler
 
