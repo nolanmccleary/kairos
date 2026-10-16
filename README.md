@@ -9,7 +9,6 @@ This README gives a basic build and run overview. For more in-depth architectura
 
 
 
-## TLDR
 
 ```bash
 # Kairos battery, loaded over JTAG (no SD card needed)
