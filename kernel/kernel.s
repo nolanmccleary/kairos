@@ -1,5 +1,3 @@
-@; kernel.s -- reset/boot entry, the exception vector table, and the IRQ/FIQ/fault
-@; handlers. Runs from OCRAM; the ._vectors section must link first (0xffff0000).
 .syntax unified
 .arm
 
@@ -34,6 +32,8 @@
 .equ RSTMGR_PERMODRST_L4WD, 0xC0   @; (1<<6)|(1<<7)
 
 
+
+
 .section ._vectors, "ax"
 .global _vectors
 .global _reset_handler
@@ -56,14 +56,29 @@ _vectors:
     B _fiq_handler
 
 
+
+
+
 .section .boot_entry, "ax"
 .global _boot_entry
 _boot_entry:
     B _reset_handler
 
 
+
+
+
+
 .text
 _reset_handler:
+
+    ldr r0, =RSTMGR_PERMODRST @; Disable watchdog interrupts
+    ldr r1, [r0]
+    orr r1, r1, #RSTMGR_PERMODRST_L4WD
+    str r1, [r0]
+    dsb
+
+
     ldr r0, =_vectors
     mcr p15, 0, r0, c12, c0, 0  @; VBAR = _vectors
 
@@ -106,6 +121,15 @@ _reset_handler:
 
     msr CPSR_c, #(MODE_SYS | I_BIT | F_BIT)
     mov sp, r0
+
+
+    mrc p15, 0, r1, c1, c0, 0
+    bic r1, r1, #0x1            @; MMU off
+    bic r1, r1, #(0x1 << 12)   @; I-cache off
+    bic r1, r1, #(0x1 << 2)    @; D-cache off
+    dsb
+    mcr p15, 0, r1, c1, c0, 0
+    isb
 
 
     @; INVALIDATE L1 I-CACHE
@@ -156,6 +180,7 @@ set_loop:
         cmp r0, #0
         bne _cpu1_fork
     .endif
+    
 
 
 _cpu0_fork:
@@ -216,6 +241,7 @@ host_shared_sdram_zero:
     blx r0                  @; (SDRAM appcode already copied in by load_from_sd() inside cpu0_startup)
 
 
+
 _cpu1_fork:
 .if ENABLE_SMP != 0
     .align 2
@@ -237,13 +263,14 @@ _cpu1_fork:
         cpsie i
 
         ldr r0, =g_cpu_mailbox_uncached
-        mov r1, #2
-        str r1, [r0]
-        dsb
+        mov r1, #2 
+        str r1, [r0]  
+        dsb 
         sev
 
         bl cpu1_main
 .endif
+    
 
 
 _identify_and_clear_source:
@@ -253,6 +280,8 @@ _identify_and_clear_source:
     str     r1, [r0]            @; EOI
     mov     r0, r1              @; arm calling convention returns value in r0; we want to return interrupt ID
     BX      lr
+
+
 
 
 _undef_handler:
@@ -293,12 +322,12 @@ _abort_handler:
 
 
 @;REMEMBER: We are in SYS mode when IRQ fires. That means:
-@;1) lr_irq stores last SYS PC
+@;1) lr_irq stores last SYS PC 
 @;2) after going back to sys mode, lr_sys stores last sys LR
 _irq_handler:
     sub lr, lr, #4 @; get lr_irq i.e. get the last pre-interrupt PC value
     srsfd sp!, #0x1f @; Store Return State Full Descending --- push cpsr then pc (cached spsr then lr_irq in this case) onto sysmode stack (specified by 0x1f), sp autodecs
-
+    
     cps #0x1f @; Change Processor State --- switch to system mode
     cpsid i @; Change Processor State Interrupt Disable --- no nested interrupts for now
 
@@ -309,7 +338,7 @@ _irq_handler:
 
     push {lr} @; push lr_sys onto sysmode stack
 
-
+    
     cps #0x12
 
     BL _identify_and_clear_source @; get irq switch vector and ack interrupt (accepted + finished reading switch vector)
@@ -328,17 +357,21 @@ _irq_handler:
     RFEFD sp! @; Set PC and CPSR (re-enables IRQs via restored SPSR)
 
 
+
+
+
+
 _fiq_handler:
     sub lr, lr, #4 @; get lr_irq
     srsfd sp!, #0x1f @; save lr_irq and spsr_irq onto sysmode stack; decrement sysmode sp after
-
+    
     cps #0x1f @; switch to system mode
     cpsid if @; no nested interrupts for now
 
     push {r0-r3, r12} @; store AAPCS regset
 
     and r1, sp, #4 @; 8-byte align sp
-    sub sp, sp, r1
+    sub sp, sp, r1 
     push {r1, lr} @; store adjustment and lr_sys
 
     BL _identify_and_clear_source
@@ -350,4 +383,5 @@ _fiq_handler:
 
     @; NOTE: no cpsie here — RFEFD restores CPSR (I/F bits) atomically with the PC.
     RFEFD sp! @; Set PC and CPSR
+
 

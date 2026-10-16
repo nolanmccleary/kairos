@@ -496,7 +496,8 @@ If it wasn't apparent by now this isn't a production-ready kernel at all. Here's
 3. The kernel is not robust at all
 4. The only synchronization primitive currently provided is a binary semaphore with a few different penalty mechanisms
 5. The test code is kind of a mess
-6. Did I mention the thing isn't robust?
+6. Nothing set up for peripherals/other timers/other processor modes atm
+7. Did I mention the thing isn't robust?
 
 The reality is I've worked on this thing on and off for a few months now and most of the reward obtained has come firstly from implementing the kernel by hand because I'm weird and i like doing stuff like this and secondly from the joy of seeing an A9 do things that it was never advertised to do. The marginal effort to learning ratio required to go from where this project is now to something that could be mistaken for a hardened production-ready system is not worth it for me and I wanna start working on other things. As such, I've decided to release the project as-is with absolutely no guarantees of further updates. The code is available [here](https://github.com/nolanmccleary/kairos) and I would happily invite any discussions regarding test accuracy etc. The harness is kind of jank but if you have a DE1-SoC and an SD card you should be able to run everything and reproduce my results with minimal effort. 
 

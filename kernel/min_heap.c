@@ -120,7 +120,13 @@ heap_op_e insert_node(heap_t* heap, thread_t* thread, uint32_t order)
 
 heap_op_e remove_head(heap_t* heap)
 {
-    if (heap->curr_index > 0)
+    if (heap->curr_index == 1)
+    {
+        heap->curr_index--;
+        return OP_OK; 
+    }
+
+    else if (heap->curr_index > 1)
     {
         heap->heap[0] = heap->heap[--heap->curr_index];
         heap->heap[0].thread->md.heap_index = 0;
@@ -135,7 +141,15 @@ heap_op_e remove_head(heap_t* heap)
 
 heap_op_e remove_node(heap_t* heap, size_t index)
 {
-    if (heap->curr_index > 0)
+    if (index >= heap->curr_index) return OP_FAILED;
+
+    else if (heap->curr_index == 1)
+    {
+        heap->curr_index--;
+        return OP_OK;
+    }
+
+    else if (heap->curr_index > 1)
     {
         heap->heap[index] = heap->heap[--heap->curr_index];
         heap->heap[index].thread->md.heap_index = index;
@@ -152,7 +166,9 @@ heap_op_e remove_node(heap_t* heap, size_t index)
 
 heap_op_e balance_node(heap_t* heap, size_t index, uint32_t order)
 {
-    if (heap->curr_index > 0)
+    if (heap->curr_index == 1) return OP_OK;
+
+    else if (heap->curr_index > 1)
     {
         size_t parent_index = find_parent_index(index);
         heap->heap[index].order = order;
