@@ -103,13 +103,13 @@ static void ctxsw_run(void)
 
     /* Short periods (ticks) so a task is released on ~half of all ticks -> switch
      * ticks accrue fast enough to fill the ring in seconds, not ~half a minute. */
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
     h0 = add_periodic_thread_to_core(CPU0, ctx_job, 4u,  PERIODIC, 0u);
     h1 = add_periodic_thread_to_core(CPU0, ctx_job, 6u,  PERIODIC, 1u);
     h2 = add_periodic_thread_to_core(CPU0, ctx_job, 10u, PERIODIC, 2u);
     ctxsw_active = 1u;
     __asm__ __volatile__("dmb sy" ::: "memory");
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     /* Spin on main while ticks fire; the next_thread hook fills both rings. main
      * being runnable is what generates the resume (main->main) ticks, and the
@@ -122,12 +122,12 @@ static void ctxsw_run(void)
         __asm__ __volatile__("" ::: "memory");
     }
 
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
     ctxsw_active = 0u;
     kill_thread(h0);
     kill_thread(h1);
     kill_thread(h2);
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     psched_deinit();
 }
@@ -161,7 +161,7 @@ static void irqlat_run(void)
     GICC_PMR  = 0xFFu;
     GICC_CTLR = 1u;
 
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     for (uint32_t i = 0; i < IRQ_SAMPLES; i++)
     {
@@ -178,7 +178,7 @@ static void irqlat_run(void)
         g_irqlat[i] = irq_ping_done ? (irq_ping_t1 - t0) : 0xFFFFFFFFu;   /* sentinel: ping lost, don't hang */
     }
 
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     GICD_ISENABLER0 = (1u << 27);   /* restore the timer PPI we masked */
 }
@@ -215,7 +215,7 @@ static void mutex_run(void)
 
     /* Interrupts off throughout: the uncontended pair must not be preempted, and
      * the contended number must reflect only cross-core contention, not a tick. */
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     for (uint32_t i = 0; i < MUTEX_SAMPLES; i++)
     {
@@ -257,7 +257,7 @@ static void mutex_run(void)
     __asm__ __volatile__("dmb sy" ::: "memory");
 #endif
 
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 }
 
 
@@ -315,7 +315,7 @@ static void memlat_write_loop(volatile uint32_t* target, uint32_t* out)
 
 static void memlat_run(void)
 {
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     uint32_t t0 = pmu_cycles();
     __asm__ __volatile__("dsb sy" ::: "memory");
@@ -326,7 +326,7 @@ static void memlat_run(void)
     memlat_read_loop (&g_memlat_ocram_target, g_memlat_ocram_rd);
     memlat_write_loop(&g_memlat_ocram_target, g_memlat_ocram_wr);
 
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 }
 
 

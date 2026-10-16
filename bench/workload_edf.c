@@ -294,7 +294,7 @@ static uint32_t measure_cycles_per_tick(void)
 static uint32_t measure_cycles_per_iter(void)
 {
     __asm__ __volatile__(
-        "cpsid i"
+        "cpsid " PREEMPT_MASK
         :
         :
         : "memory"
@@ -309,7 +309,7 @@ static uint32_t measure_cycles_per_iter(void)
 
 
     __asm__ __volatile__(
-        "cpsie i"
+        "cpsie " PREEMPT_MASK
         :
         :
         : "memory"
@@ -375,7 +375,7 @@ void edf_run(void)
     heap_init();
     psched_init();
     __asm__ __volatile__(
-            "cpsie i"
+            "cpsie " PREEMPT_MASK
             :
             :
             : "memory"
@@ -405,7 +405,7 @@ void edf_run(void)
          * Trial construction must not race the scheduler.
          */
         __asm__ __volatile__(
-            "cpsid i"
+            "cpsid " PREEMPT_MASK
             :
             :
             : "memory"
@@ -455,7 +455,7 @@ void edf_run(void)
         KTRACE_EDF_READY();
 
         __asm__ __volatile__(
-            "cpsie i"
+            "cpsie " PREEMPT_MASK
             :
             :
             : "memory"
@@ -481,7 +481,7 @@ void edf_run(void)
          * Remove this trial before constructing the next one.
          */
         __asm__ __volatile__(
-            "cpsid i"
+            "cpsid " PREEMPT_MASK
             :
             :
             : "memory"
@@ -499,7 +499,7 @@ void edf_run(void)
 
 
         __asm__ __volatile__(
-            "cpsie i"
+            "cpsie " PREEMPT_MASK
             :
             :
             : "memory"
@@ -573,7 +573,7 @@ void edf_balance_run(void)
 
     thread_t* handles[BAL_NTASKS];
 
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     trace_active = 1u;
 
@@ -587,18 +587,18 @@ void edf_balance_run(void)
 
     KTRACE_BALANCE_READY();
 
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     KTRACE_WAIT_RELEASE();
 
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     for (uint32_t i = 0; i < BAL_NTASKS; i++)
     {
         kill_thread(handles[i]);
     }
 
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     psched_deinit();
 

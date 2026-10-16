@@ -1620,32 +1620,9 @@ def main(bootable: bool = False) -> None:
 
     symbols  = elf_symbols(TEST_ELF)
     num_cpus = 2 if symbols.get("_cfg_enable_smp") else 1
-    require_symbols(symbols, (
-        "_reset_handler", "g_metrics", "g_edf_metrics", "g_ticks_m", "g_misses_m", "g_overhead_m", "g_core_u_m",
-        "g_edf_u_values", "g_edf_u_count", "g_edf_u_index", "g_edf_u_permille",
-        "g_edf_periods", "g_edf_C", "g_edf_done", "g_sched_trace", "g_trace_len", "g_test_release",
-        "g_alloc_samples", "g_rmw_samples", "g_matmul_samples",
-        "ktrace_bp_alloc_done", "ktrace_bp_edf_ready", "ktrace_bp_edf_done", "fault_trap", "g_fault",
-        "g_error_message", "g_error_ctx", "g_edf_bad_thread",
-        "g_bal_assign", "g_bal_periods", "ktrace_bp_balance_ready", "ktrace_bp_balance_done",
-        "g_ctxsw_switch", "g_ctxsw_resume", "g_ctxsw_switch_count", "g_ctxsw_resume_count",
-        "g_irqlat", "g_mutex_unc", "g_mutex_con", "ktrace_bp_micro_done", "g_micro_phase",
-        "g_memlat_sdram_rd", "g_memlat_sdram_wr", "g_memlat_ocram_rd", "g_memlat_ocram_wr",
-        "g_memlat_baseline",
-        "ktrace_bp_suspend_done", "g_susp_phase",
-        "g_susp_self_requested_delay", "g_susp_self_delay", "g_susp_self_resumed",
-        "g_susp_self_regs_ok", "g_susp_self_ticks", "g_susp_self_n",
-        "g_susp_other_requested_delay", "g_susp_other_suspend_tick", "g_susp_other_last_pre",
-        "g_susp_other_first_post", "g_susp_other_ticks", "g_susp_other_n",
-        "ktrace_bp_persist_ready", "ktrace_bp_persist_done",
-        "g_pp_periods", "g_pp_periodic_assign", "g_pp_periodic_done",
-        "g_pp_persist_ids", "g_pp_persist_prio", "g_pp_persist_assign"))
-    if bootable:
-        require_symbols(symbols, ("g_boot_release",))
 
-    bp_edf_ready = symbols["ktrace_bp_edf_ready"]
-    bp_edf_done  = symbols["ktrace_bp_edf_done"]
-    bp_fault     = symbols["fault_trap"]
+
+    bp_fault = symbols.get("fault_trap")
 
     balance: BalanceResult | None = None
     micro: MicroResult | None = None
@@ -1671,37 +1648,58 @@ def main(bootable: bool = False) -> None:
         else:
             ocd.load_image(TEST_ELF, symbols["_reset_handler"])
 
-        u_count = ocd.read_u32(symbols["g_edf_u_count"])
-        if not 1 <= u_count <= 64:
-            raise RuntimeError(f"invalid EDF U count: {u_count}")
-        periods  = tuple(ocd.read_words(symbols["g_edf_periods"], EDF_TASKS))
-        u_values = tuple(ocd.read_words(symbols["g_edf_u_values"], u_count))
-        print(f"EDF U sweep: {list(u_values)}")
-        print(f"EDF periods: {list(periods)}\n")
+        ocd.fault_addr   = symbols["g_fault"]
+        ocd.error_addr   = symbols["g_error_message"]
+        ocd.ctx_addr     = symbols["g_error_ctx"]
+        ocd.edf_bad_addr = symbols.get("g_edf_bad_thread")
+        ocd.num_cpus     = num_cpus
 
-        ocd.fault_addr = symbols["g_fault"]
-        ocd.error_addr = symbols["g_error_message"]
-        ocd.ctx_addr   = symbols["g_error_ctx"]
-        ocd.edf_bad_addr = symbols["g_edf_bad_thread"]
-        ocd.num_cpus   = num_cpus
-        ocd.add_hw_breakpoint(bp_edf_ready)
-        ocd.add_hw_breakpoint(bp_edf_done)
-        ocd.add_hw_breakpoint(symbols["ktrace_bp_balance_ready"])
-        ocd.add_hw_breakpoint(symbols["ktrace_bp_balance_done"])
-        ocd.add_hw_breakpoint(bp_fault)
+        # A test's <name>_run symbol survives --gc-sections only if main.c calls it, so the
+        # ELF is the single source of truth for which tests run -- no hand-kept control panel.
+        # Each phase is gated on its marker below; EDF/balance also read config + arm their
+        # breakpoints here, only when present.
+        has = lambda name: name in symbols
+        print("tests detected: " + ", ".join(t[:-4] for t in (
+            "allocbench_run", "edf_run", "edf_balance_run", "micro_run",
+            "suspend_run", "persistent_run", "schedsweep_run") if has(t)) + "\n")
+
+        periods, u_values = (), ()
+        if has("edf_run"):
+            u_count = ocd.read_u32(symbols["g_edf_u_count"])
+            if not 1 <= u_count <= 64:
+                raise RuntimeError(f"invalid EDF U count: {u_count}")
+            periods  = tuple(ocd.read_words(symbols["g_edf_periods"], EDF_TASKS))
+            u_values = tuple(ocd.read_words(symbols["g_edf_u_values"], u_count))
+            print(f"EDF U sweep: {list(u_values)}")
+            print(f"EDF periods: {list(periods)}\n")
+
+        # Arm all breakpoints BEFORE releasing the boot gate.
+        if bp_fault:
+            ocd.add_hw_breakpoint(bp_fault)
+        if has("edf_run"):
+            ocd.add_hw_breakpoint(symbols["ktrace_bp_edf_ready"])
+            ocd.add_hw_breakpoint(symbols["ktrace_bp_edf_done"])
+        if has("edf_balance_run"):
+            ocd.add_hw_breakpoint(symbols["ktrace_bp_balance_ready"])
+            ocd.add_hw_breakpoint(symbols["ktrace_bp_balance_done"])
         if bootable:
             ocd.write_u32(symbols["g_boot_release"], 1)
 
-        # Control panel: comment a phase to skip it (also comment its call in main.c).
         alloc_sweeps: dict = {}
         try:
-            alloc_metrics, warmup, alloc_sweeps = allocbench(ocd, symbols)
-            edf_results, traces, cpu1_traces = edf_test(ocd, symbols, num_cpus, periods, u_values)
-            balance = balance_test(ocd, symbols, num_cpus)
-            micro = micro_test(ocd, symbols)
-            suspend = suspend_test(ocd, symbols)
-            persist = persistent_test(ocd, symbols, num_cpus)
-            if symbols.get("ktrace_bp_sched_sweep_done"):
+            if has("allocbench_run"):
+                alloc_metrics, warmup, alloc_sweeps = allocbench(ocd, symbols)
+            if has("edf_run"):
+                edf_results, traces, cpu1_traces = edf_test(ocd, symbols, num_cpus, periods, u_values)
+            if has("edf_balance_run"):
+                balance = balance_test(ocd, symbols, num_cpus)
+            if has("micro_run"):
+                micro = micro_test(ocd, symbols)
+            if has("suspend_run"):
+                suspend = suspend_test(ocd, symbols)
+            if has("persistent_run"):
+                persist = persistent_test(ocd, symbols, num_cpus)
+            if has("schedsweep_run"):
                 sched_rows = schedsweep_test(ocd, symbols)
         except KeyboardInterrupt:
             # Ctrl-C usually means the run hung -- dump where both cores are stuck

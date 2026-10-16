@@ -196,18 +196,18 @@ void suspend_run(void)
     g_susp_self_done    = 0u;
     for (uint32_t i = 0; i < SUSP_TICKS; i++) g_susp_self_ticks[i] = 0u;
 
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
     thread_t* suspender = add_periodic_thread_to_core(CPU0, suspender_job, SELF_PERIOD, PERIODIC, SELF_ID);
     if (suspender == NULL) raise_error("suspend_run: could not create suspender");
     __asm__ __volatile__("dmb sy" ::: "memory");
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     uint32_t budget = 0u;
     while (!g_susp_self_done && budget < SUSP_BUDGET) { budget++; __asm__ __volatile__("" ::: "memory"); }
 
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
     kill_thread(suspender);
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     /* ---- scenario B ---- */
     g_susp_phase              = 2u;
@@ -220,20 +220,20 @@ void suspend_run(void)
     susp_ctrl_n               = 0u;
     for (uint32_t i = 0; i < SUSP_TICKS; i++) g_susp_other_ticks[i] = 0u;
 
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
     g_susp_victim = add_periodic_thread_to_core(CPU0, victim_job, OTHER_VICTIM_PERIOD, PERIODIC, VICTIM_ID);
     thread_t* controller = add_periodic_thread_to_core(CPU0, controller_job, OTHER_CTRL_PERIOD, PERIODIC, CTRL_ID);
     if (g_susp_victim == NULL || controller == NULL) raise_error("suspend_run: could not create scenario-B tasks");
     __asm__ __volatile__("dmb sy" ::: "memory");
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     budget = 0u;
     while (!g_susp_other_done && budget < SUSP_BUDGET) { budget++; __asm__ __volatile__("" ::: "memory"); }
 
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
     kill_thread(g_susp_victim);
     kill_thread(controller);
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     psched_deinit();
 

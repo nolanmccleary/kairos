@@ -76,7 +76,7 @@ void schedsweep_run( void )
     pmu_init();
     heap_init();
     psched_init();
-    __asm__ volatile ( "cpsie i" ::: "memory" );
+    __asm__ volatile ( "cpsie " PREEMPT_MASK ::: "memory" );
 
     g_schedsweep_n = ( uint32_t ) SCHED_N_LEVELS;
 
@@ -91,7 +91,7 @@ void schedsweep_run( void )
         /* Load N underloaded periodic tasks on CPU0 (spread periods -> staggered
          * releases, representative of a real taskset rather than a synchronized storm;
          * the ~no-op job keeps compute utilization near zero). */
-        __asm__ volatile ( "cpsid i" ::: "memory" );
+        __asm__ volatile ( "cpsid " PREEMPT_MASK ::: "memory" );
         for( uint32_t i = 0; i < N; i++ )
         {
             handles[ i ] = add_periodic_thread_to_core( CPU0, sched_job, 100u + i, PERIODIC, i );
@@ -99,7 +99,7 @@ void schedsweep_run( void )
         sweep_level = li;
         __asm__ volatile ( "dmb sy" ::: "memory" );
         sweep_active = 1u;
-        __asm__ volatile ( "cpsie i" ::: "memory" );
+        __asm__ volatile ( "cpsie " PREEMPT_MASK ::: "memory" );
 
         /* Spin (in main_thread) while CPU0's scheduler ticks fill this level's buffer.
          * Underloaded, so CPU0 is mostly idle and main_thread runs to observe progress. */
@@ -111,12 +111,12 @@ void schedsweep_run( void )
         sweep_active = 0u;
         __asm__ volatile ( "dmb sy" ::: "memory" );
 
-        __asm__ volatile ( "cpsid i" ::: "memory" );
+        __asm__ volatile ( "cpsid " PREEMPT_MASK ::: "memory" );
         for( uint32_t i = 0; i < N; i++ )
         {
             kill_thread( handles[ i ] );
         }
-        __asm__ volatile ( "cpsie i" ::: "memory" );
+        __asm__ volatile ( "cpsie " PREEMPT_MASK ::: "memory" );
 
         /* Let the killed tasks reap (next_up drains them) before the next level. */
         uint32_t t0 = g_cpus[ CPU0 ].ticks;

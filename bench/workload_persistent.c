@@ -196,13 +196,13 @@ static uint32_t pp_cycles_per_tick(void)
 
 static uint32_t pp_cycles_per_iter(void)
 {
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     uint32_t start = pmu_cycles();
     pp_burn(PP_CALIB_ITERS);
     uint32_t cycles = pmu_cycles() - start;
 
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     return cycles / PP_CALIB_ITERS;
 }
@@ -241,7 +241,7 @@ void persistent_run(void)
     thread_t* persist_handles[PP_NPERSIST];
 
     /* Construction must not race the scheduler. */
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     trace_active = 1u;
 
@@ -263,12 +263,12 @@ void persistent_run(void)
     /* Assignment is final here (nothing has run) -- host reads g_pp_*_assign. */
     KTRACE_PERSIST_READY();
 
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     /* Host samples the schedule trace after a measurement window, then releases. */
     KTRACE_WAIT_RELEASE();
 
-    __asm__ __volatile__("cpsid i" ::: "memory");
+    __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     for (uint32_t i = 0; i < PP_NPERIODIC; i++)
     {
@@ -279,7 +279,7 @@ void persistent_run(void)
         kill_thread(persist_handles[i]);
     }
 
-    __asm__ __volatile__("cpsie i" ::: "memory");
+    __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     psched_deinit();
 

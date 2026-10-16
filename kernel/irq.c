@@ -63,6 +63,14 @@ void c_irq_handler(int id)
 
 void c_fiq_handler(int id)
 {
+#if USE_FIQ
+    /* USE_FIQ: every GIC interrupt (the tick and the SMP SGIs) arrives as an FIQ because
+     * GICC_CTLR.FIQEn is set and all interrupts stay in Group 0. Dispatch is identical to
+     * the IRQ build, so just hand it to c_irq_handler. The full-context FIQ entry in
+     * kernel.s already saved the interrupted thread, so a tick can switch. */
+    c_irq_handler(id);
+#else
     (void)id;
+#endif
 }
 

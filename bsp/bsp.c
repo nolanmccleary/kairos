@@ -340,9 +340,11 @@ void cpu0_startup(void)
 
 
 #if !USE_FREERTOS
-    __asm__ volatile (
-        "cpsie i\n\t"
-    );
+#if USE_FIQ
+    __asm__ volatile ("cpsie if\n\t");   /* unmask FIQ (the tick) + IRQ before psched_init's SMP SGI handshake */
+#else
+    __asm__ volatile ("cpsie i\n\t");
+#endif
 
     psched_init();
 #endif

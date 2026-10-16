@@ -236,7 +236,11 @@ host_shared_sdram_zero:
     blt host_shared_sdram_zero
 .endif
 
+.if USE_FIQ != 0
+    cpsie if                @; USE_FIQ: unmask FIQ (the tick) as well as IRQ
+.else
     cpsie i
+.endif
     ldr r0, =main           @; main lives in OCRAM; absolute address resolved at link time
     blx r0                  @; (SDRAM appcode already copied in by load_from_sd() inside cpu0_startup)
 
@@ -260,7 +264,11 @@ _cpu1_fork:
 
     engage:
         bl cpu1_startup
+.if USE_FIQ != 0
+        cpsie if
+.else
         cpsie i
+.endif
 
         ldr r0, =g_cpu_mailbox_uncached
         mov r1, #2 
@@ -362,26 +370,29 @@ _irq_handler:
 
 
 _fiq_handler:
-    sub lr, lr, #4 @; get lr_irq
-    srsfd sp!, #0x1f @; save lr_irq and spsr_irq onto sysmode stack; decrement sysmode sp after
-    
+.if USE_FIQ != 0
+
+    cpsid if
+
+    sub lr, lr, #4
+    srsfd sp!, #0x1f @; push last SYS cpsr + pc onto the SYS stack
     cps #0x1f @; switch to system mode
-    cpsid if @; no nested interrupts for now
-
-    push {r0-r3, r12} @; store AAPCS regset
-
-    and r1, sp, #4 @; 8-byte align sp
-    sub sp, sp, r1 
-    push {r1, lr} @; store adjustment and lr_sys
-
+    cpsid if @; no nested IRQ or FIQ inside the handler
+    push {r0-r12} @; FULL integer file (a switch resumes a DIFFERENT task)
+    push {lr} @; lr_sys
+    cps #0x12 @; run the scheduler in IRQ mode, NOT FIQ mode: r8-r12 are then the common
+              @; bank (not the FIQ bank) so the C scheduler, compiled for common registers,
+              @; is correct. sp_irq is free under USE_FIQ since no interrupt uses the IRQ line.
     BL _identify_and_clear_source
-    BL c_fiq_handler @; r0 injects arg1 of c func as per ARM ABI, set via identify_and_clear_source
+    BL c_fiq_handler
 
-    pop {r1, lr} @; restore lr_sys
-    add sp, sp, r1 @; unadjust stack
-    pop {r0-r12} @; restore AAPCS regset
 
-    @; NOTE: no cpsie here — RFEFD restores CPSR (I/F bits) atomically with the PC.
-    RFEFD sp! @; Set PC and CPSR
+    cps #0x1f @; back to system mode
+    pop {lr}
+    pop {r0-r12}
+    RFEFD sp! @; restore CPSR (I/F) + PC atomically
+.else
+    bl .
+.endif
 
 

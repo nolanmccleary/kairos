@@ -1,0 +1,8 @@
+distribution,count,min,mean,median,p99,max,unit
+1 tasks,512,713,721.7,713,1019,1190,cycles
+2 tasks,512,713,727.1,713,1049,1418,cycles
+4 tasks,512,713,737.3,713,1151,1566,cycles
+8 tasks,512,713,758.0,723,1369,1829,cycles
+16 tasks,512,723,781.9,723,1431,2688,cycles
+32 tasks,512,713,826.8,713,1451,4050,cycles
+64 tasks,512,703,930.7,714,1768,7108,cycles

@@ -1,0 +1,15 @@
+kind,id,priority,period,core,run_ticks,done
+periodic,0,,40,0,1980,201
+periodic,1,,50,1,1872,181
+periodic,2,,60,0,1836,134
+periodic,3,,80,1,1800,113
+periodic,4,,100,0,1740,80
+periodic,5,,120,1,1776,76
+persistent,10,HIGH,200,0,874,
+persistent,11,HIGH,200,1,1734,
+persistent,12,HIGH,200,0,752,
+persistent,20,MED,200,1,0,
+persistent,30,LOW,200,0,0,
+
+CPU0_util,0.7656,misses=0,idle_pct=0.2
+CPU1_util,0.7348,misses=0,idle_pct=0.2

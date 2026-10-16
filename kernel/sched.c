@@ -27,11 +27,31 @@ static thread_fifo_t med_fifos[NUM_CPUS];
 static thread_fifo_t high_fifos[NUM_CPUS];
 
 
-#define SAVE_SYS_SP(dst) \
-    __asm__ __volatile__("cps #0x1f\n\t" "mov %0, sp\n\t" "cps #0x12\n\t" : "=r"(dst))
+/* The tick handler runs the scheduler in IRQ mode in BOTH builds: the IRQ path enters it
+ * directly, and the FIQ path (kernel.s _fiq_handler) drops from FIQ to IRQ mode before the
+ * C runs, specifically so r8-r12 are the common bank, not the FIQ bank. So these SP macros
+ * always return to IRQ mode (0x12) after touching the SYS sp. */
+#define SCHED_HANDLER_MODE "0x12"
 
-#define LOAD_SYS_SP(src) \
-    __asm__ __volatile__("cps #0x1f\n\t" "mov sp, %0\n\t" "cps #0x12\n\t" :: "r"(src) : "memory")
+#define SAVE_SYS_SP(dst)                           \
+    __asm__ __volatile__(                          \
+        "cps #0x1f\n\t"                            \
+        "mov r0, sp\n\t"                           \
+        "cps #" SCHED_HANDLER_MODE "\n\t"           \
+        "mov %0, r0\n\t"                           \
+        : "=r"(dst)                                \
+        :                                          \
+        : "r0", "memory")
+
+#define LOAD_SYS_SP(src)                           \
+    __asm__ __volatile__(                          \
+        "mov r0, %0\n\t"                           \
+        "cps #0x1f\n\t"                            \
+        "mov sp, r0\n\t"                           \
+        "cps #" SCHED_HANDLER_MODE "\n\t"           \
+        :                                          \
+        : "r"(src)                                 \
+        : "r0", "memory")
 
 #define SWITCH_FRAME_AND_RETURN(sp) \
     __asm__ __volatile__("mov sp, %0\n\t" "pop {lr}\n\t" "pop {r0-r12}\n\t" "RFEFD sp!\n\t" :: "r"(sp) : "memory")
@@ -333,7 +353,11 @@ static inline bool next_up(cpu_core_e core)
 
 static void thread_exit()
 {
+#if USE_FIQ
+    __asm__ __volatile__("cpsid if" ::: "memory");   /* the FIQ tick must not preempt this critical section */
+#else
     __asm__ __volatile__("cpsid i" ::: "memory");
+#endif
 
     cpu_core_e core = curr_core();
     lock_mutex_persistent(&(g_cpus[core].thread_mutex));
@@ -683,6 +707,13 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
 
         char* new_sp = g_cpus[core].curr_thread->sp;
 
+        /* The scheduler is now mid-switch: curr_thread points at the next thread while sp_sys
+         * is still this one's. The mutex guarded that up to here, but it has to be released
+         * before we leave (the next thread needs it) and we never return to unlock later. So
+         * fence the tick across the unlock -> frame-switch window; the RFEFD inside
+         * SWITCH_FRAME_AND_RETURN restores the next thread's cpsr, re-enabling it. This is the
+         * same protection thread_exit gets from its leading cpsid. */
+        __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
         unlock_mutex(&(g_cpus[core].thread_mutex));
 
         SWITCH_FRAME_AND_RETURN(new_sp);

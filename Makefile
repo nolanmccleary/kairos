@@ -81,6 +81,8 @@ ENABLE_NULL_GUARD ?= 1   # unmap VA 0..1MB so NULL / near-NULL derefs fault (nee
 
 FREERTOS ?= 0   # 0 = Kairos battery (test.py), 1 = FreeRTOS battery (test_freertos.py)
 
+USE_FIQ ?= 0    # drive the scheduler tick as an FIQ (Group 0) instead of an IRQ
+
 
 # Self-boot test gate: compile the spin at the top of main() that hangs until
 # JTAG writes g_boot_release. Needed only for the no-debugger SD boot flow --
@@ -110,8 +112,10 @@ CFLAGS := \
 	-DENABLE_SMP=$(ENABLE_SMP) \
 	-DENABLE_NULL_GUARD=$(ENABLE_NULL_GUARD) \
 	-DBOOT_TEST=$(BOOT_TEST) \
+	-DUSE_FIQ=$(USE_FIQ) \
 	-Wa,--defsym,ENABLE_SMP=$(ENABLE_SMP) \
 	-Wa,--defsym,BOOT_TEST=$(BOOT_TEST) \
+	-Wa,--defsym,USE_FIQ=$(USE_FIQ) \
 	-Wa,--defsym,MODE_TEST=1 \
 	-Wa,--defsym,BOARD_GICC_BASE=$(BOARD_GICC_BASE) \
 	-Wa,--defsym,BOARD_IS_QEMU=$(BOARD_IS_QEMU) \

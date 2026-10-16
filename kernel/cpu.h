@@ -9,6 +9,16 @@
 #include "thread.h"
 #include "thread_fifo.h"
 
+/* A critical section that fences the scheduler tick masks IRQ ("cpsid i") when the tick is
+ * an IRQ. Under USE_FIQ the tick is an FIQ, which "cpsid i" does NOT mask, so those sections
+ * must mask F as well. PREEMPT_MASK carries the right cpsid/cpsie operand for either build:
+ * use it as `"cpsid " PREEMPT_MASK` / `"cpsie " PREEMPT_MASK` in inline asm. */
+#if USE_FIQ
+#define PREEMPT_MASK "if"
+#else
+#define PREEMPT_MASK "i"
+#endif
+
 
 #if ENABLE_SMP == 1
 #define NUM_CPUS 2
