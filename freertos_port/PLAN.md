@@ -12,7 +12,7 @@ FreeRTOS vs Kairos on identical silicon, clock, and memory. Selectable at build 
   does not map onto FreeRTOS.
 - **Build switch** `KERNEL ?= mine | freertos` picks which scheduler compiles. Only
   one scheduler is ever linked, so OCRAM stays in budget (FreeRTOS core at -Os is
-  roughly 10-15 KB, replacing preempt_sched/thread/min_heap/thread_fifo).
+  roughly 10-15 KB, replacing sched/thread/min_heap/thread_fifo).
 - **Boot code stays as-is** except four small `#if USE_FREERTOS` guards (see below).
 - **Allocator comparison does NOT need the switch.** Both allocators are just
   libraries, so heap_4 coexists with TLSF in one build. Run allocbench (TLSF) and the
@@ -37,7 +37,7 @@ freertos_port/
 ## Build switch mechanics
 - `KERNEL=freertos`: add vendored core + port + glue to objects, add `-DUSE_FREERTOS=1`
   and `-Wa,--defsym,USE_FREERTOS=1`, add the include dirs, drop
-  preempt_sched.c/thread.c/min_heap.c/thread_fifo.c from CORE.
+  sched.c/thread.c/min_heap.c/thread_fifo.c from CORE.
 - `KERNEL=mine`: today's build, `USE_FREERTOS=0`.
 - Allocator bench is gated separately by `BENCH_FREERTOS_ALLOC ?= 0`, additive to the
   normal build (both allocators present).
@@ -45,7 +45,7 @@ freertos_port/
 ## Boot touch points (minimal, all `#if USE_FREERTOS`)
 1. `bsp.c cpu0_startup()`: skip the trailing `psched_init()` and the CPU1 SMP engage.
 2. `main.c`: dispatch to `freertos_main()` instead of the current body.
-3. `startup.s _vectors`: swap `B _irq_handler`->`FreeRTOS_IRQ_Handler`,
+3. `kernel.s _vectors`: swap `B _irq_handler`->`FreeRTOS_IRQ_Handler`,
    `B _swi_handler`->`FreeRTOS_SWI_Handler`.
 4. `timers.c`/`gic.c`: do not arm the gtimer for the Kairos tick (FreeRTOS arms it).
 

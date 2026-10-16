@@ -3,7 +3,7 @@
 #include "fault.h"
 #include "ktrace.h"
 #include "pmu.h"
-#include "preempt_sched.h"
+#include "sched.h"
 #include "telemetry.h"
 #include "thread.h"
 #include "tlsf.h"

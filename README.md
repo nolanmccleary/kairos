@@ -159,7 +159,7 @@ by `writeup.md` live in `figures/`.
 ## Repository layout
 
 ```
-kernel/        scheduler, threads, startup.s, GIC/timer/PMU/MMU, TLSF allocator
+kernel/        scheduler, threads, kernel.s, GIC/timer/PMU/MMU, TLSF allocator
 bsp/           board support: SDRAM PHY bring-up, SD, caches (Cyclone V specific)
 linker/        linker scripts (OCRAM/SDRAM placement)
 bench/         on-target workloads + telemetry hooks (ktrace)

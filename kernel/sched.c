@@ -4,7 +4,7 @@
 #include "cpu.h"
 #include "lock.h"
 #include "pmu.h"
-#include "preempt_sched.h"
+#include "sched.h"
 #include "tlsf.h"
 #include "system.h"
 #include "thread.h"

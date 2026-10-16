@@ -1,6 +1,6 @@
 #include "lock.h"
 #include "cpu.h"
-#include "preempt_sched.h"
+#include "sched.h"
 
 
 volatile uint32_t g_spin_exit;

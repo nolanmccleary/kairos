@@ -169,7 +169,7 @@
  * On release from reset, CPU1 runs the ROM, which reads this word and branches to
  * it. Gen5 offset 0xC4 (U-Boot romcodegrp.ctrl=0xC0; Linux DT cpu1-start-addr &
  * 0xFF = 0xC4). Write the full entry address, no value mask. Must match the .equ
- * SYSMGR_ROMCODE_CPU1STARTADDR in kernel/startup.s. */
+ * SYSMGR_ROMCODE_CPU1STARTADDR in kernel/kernel.s. */
 #define SYSMGR_ROMCODE_CPU1STARTADDR (*(volatile uint32_t*)(SYSMGR_BASE + 0xC4U))
 
 /* NIC-301 L3 interconnect remap: bit 0 = mpuzero (route 0x0..SDRAM_SIZE to SDRAM) */

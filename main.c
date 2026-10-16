@@ -1,6 +1,6 @@
 #include <stdint.h>
 #include "bsp.h"
-#include "preempt_sched.h"
+#include "sched.h"
 #include "tlsf.h"
 #include "pmu.h"
 #include "ktrace.h"

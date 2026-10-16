@@ -33,13 +33,13 @@ endif
 
 CORE := \
 	main.c \
-	kernel/startup.s \
+	kernel/kernel.s \
 	bsp/bsp.c \
 	bsp/boot.c \
 	bsp/sequencer.c \
 	bsp/sd.c \
 	kernel/tlsf.c \
-	kernel/preempt_sched.c \
+	kernel/sched.c \
 	kernel/thread_fifo.c \
 	kernel/min_heap.c \
 	kernel/pmu.c \

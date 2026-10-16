@@ -8,7 +8,7 @@
 #include "lock.h"
 #include "thread.h"
 #include "tlsf.h"
-#include "preempt_sched.h"
+#include "sched.h"
 
 
 #ifdef MODE_TEST

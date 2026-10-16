@@ -3,7 +3,7 @@
 #include "bsp.h"
 #include "cpu.h"
 #include "timers.h"
-#include "preempt_sched.h"
+#include "sched.h"
 #include "ktrace.h"
 
 
