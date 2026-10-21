@@ -133,23 +133,23 @@ static inline bool next_up(cpu_core_e core)
         else
         {
             thread->md.owner = DEAD_HEAP;
-            min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline);
+            min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline, TYPE_THREAD);
         }
     }
 
     bool thread_found = false;
 
-    while (g_cpus[core].relHeap->curr_index > 0 && geq_wrapped(g_cpus[core].ticks, g_cpus[core].relHeap->heap[0].thread->timing.release_time))
+    while (g_cpus[core].relHeap->curr_index > 0 && geq_wrapped(g_cpus[core].ticks, ((thread_t*)g_cpus[core].relHeap->heap[0].item)->timing.release_time))
     {
-        min_heap_pop_heap(g_cpus[core].relHeap, &thread);
+        min_heap_pop_heap(g_cpus[core].relHeap, (void**)&thread);
 
         thread->md.owner = DEAD_HEAP;
-        min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline);
+        min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline, TYPE_THREAD);
     }
 
     while(g_cpus[core].deadHeap->curr_index > 0)
     {
-        thread = g_cpus[core].deadHeap->heap[0].thread;
+        thread = (thread_t*)g_cpus[core].deadHeap->heap[0].item;
 
         if (g_cpus[core].curr_thread != g_cpus[core].main_thread)
         {
@@ -181,7 +181,7 @@ static inline bool next_up(cpu_core_e core)
                 {
                     min_heap_remove_head(g_cpus[core].deadHeap);
                     thread->md.owner = REL_HEAP;
-                    min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time);
+                    min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time, TYPE_THREAD);
                 }
 
                 else min_heap_balance_node(g_cpus[core].deadHeap, thread->md.heap_index, thread->timing.deadline);
@@ -660,7 +660,7 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
             {
                 thread->md.owner = REL_HEAP;
                 min_heap_remove_node(g_cpus[core].deadHeap, thread->md.heap_index);
-                min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time);
+                min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time, TYPE_THREAD);
             }
 
             else if(thread->md.owner == REL_HEAP)
@@ -797,18 +797,18 @@ inline void next_thread()
 
             for (size_t i = 0; i < g_cpus[core].deadHeap->curr_index; i++)
             {
-                if (g_cpus[core].deadHeap->heap[i].thread != NULL)
+                if (g_cpus[core].deadHeap->heap[i].item != NULL)
                 {
-                    kFree(g_cpus[core].deadHeap->heap[i].thread);
+                    kFree(g_cpus[core].deadHeap->heap[i].item);
                 }
             }
             g_cpus[core].deadHeap->curr_index = 0;
 
             for (size_t i = 0; i < g_cpus[core].relHeap->curr_index; i++)
             {
-                if (g_cpus[core].relHeap->heap[i].thread != NULL)
+                if (g_cpus[core].relHeap->heap[i].item != NULL)
                 {
-                    kFree(g_cpus[core].relHeap->heap[i].thread);
+                    kFree(g_cpus[core].relHeap->heap[i].item);
                 }
             }
             g_cpus[core].relHeap->curr_index = 0;
