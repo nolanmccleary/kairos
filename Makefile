@@ -205,8 +205,8 @@ test: build/test.elf
 boot:
 	rm -rf build
 	$(MAKE) BOOT_TEST=1 build/test.elf
-	$(OBJCOPY) -O binary -R .appcode build/test.elf build/preloader.bin
-	$(OBJCOPY) -O binary -j .appcode build/test.elf build/app.bin
+	$(OBJCOPY) -O binary -R .appcode -R .kern_sdram build/test.elf build/preloader.bin
+	$(OBJCOPY) -O binary -j .appcode -j .kern_sdram build/test.elf build/app.bin
 	@echo "preloader.bin: $$(wc -c < build/preloader.bin) bytes (OCRAM; must fit the boot ROM budget)"
 	@echo "app.bin:       $$(wc -c < build/app.bin) bytes (SDRAM app/test code; load_from_sd reads this from SD)"
 	mkimage -T socfpgaimage -d build/preloader.bin build/preloader.img && echo "wrote build/preloader.img"

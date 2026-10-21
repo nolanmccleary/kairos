@@ -26,7 +26,7 @@ _und_stack_size = 0x200;
 
 _bank_size = 0x80;
 
-_appcode_offset = 0x00100000;   /* 1 MB: free SDRAM below the heap, above the mmu tables */
+_post_heap_offset = 0x00100000;   /* 1 MB: free SDRAM below the heap, above the mmu tables */
 
 _heap_offset = 0x200000;
 _heap_size   = 0x01000000;
@@ -72,13 +72,35 @@ SECTIONS
      * Empty until bench/*.o is relocated here (and flash_sd.sh writes app.bin).
      * --------------------------------------------------------------------- */
 
-    .appcode ORIGIN(SDRAM) + _appcode_offset :
+    .kern_sdram ORIGIN(SDRAM) + _post_heap_offset :
     {
         . = ALIGN(8);
         _appcode_start = .;
-        *workload_*.o(.text*)   /* workload CODE only. .rodata stays in OCRAM: the host reads the
-                                 * const config (g_edf_u_count/periods/u_values) at the boot gate,
-                                 * before cpu0_startup brings SDRAM up. NOT ktrace/telemetry. */
+
+        *sched.o(.text*)
+        *min_heap.o(.text*)
+        *telemetry.o(.text*)
+
+        . = ALIGN(8);
+    } > SDRAM
+
+
+    .appcode :
+    {
+        . = ALIGN(8);
+
+        *workload_edf.o(.text*)
+        *workload_allocbench.o(.text*)
+        *workload_rmw.o(.text*)
+        *workload_matmul.o(.text*)
+        *workload_micro.o(.text*)
+        *workload_suspend.o(.text*)
+        *workload_persistent.o(.text*)
+        *workload_allocsweep.o(.text*)
+        *workload_fragsweep.o(.text*)
+        *workload_schedsweep.o(.text*)
+        *workload_freertos_schedsweep.o(.text*)
+
         . = ALIGN(8);
         _appcode_end = .;
     } > SDRAM
@@ -119,21 +141,39 @@ SECTIONS
 
 
 
-    .itext ORIGIN(OCRAM) :
+    .kern_ocram ORIGIN(OCRAM) :
     {
-        _itext_start = .;
+        _kern_ocram_start = .;
         KEEP(*(._vectors))   /* 8-entry branch table expected, 0x00..0x1F */
-        . = _itext_start + _preloader_header_offset;
+        . = _kern_ocram_start + _preloader_header_offset;
         _preloader_header = .;
         . = . + _preloader_header_size;
         KEEP(*(.boot_entry))
 
+        *main.o(.text*)
+        *kernel.o(.text*)
+        *mutex.o(.text*)
+        *bsp.o(.text*)
+        *boot.o(.text*)
+        *sequencer.o(.text*)
+        *sd.o(.text*)
+        *fault.o(.text*)
+        *gic.o(.text*)
+        *irq.o(.text*)
+        *cpu.o(.text*)
+        *timers.o(.text*)
+        *lock.o(.text*)
+        *tlsf.o(.text*)
+        *pmu.o(.text*)
+        *thread.o(.text*)
+        *thread_fifo.o(.text*)
+        *ktrace.o(.text*)
 
-        *(.text*)
+        *(.text*)      /* libgcc + anything not pulled to SDRAM above stays OCRAM */
         *(.rodata*)
 
         . = ALIGN(0x1000);
-        _itext_end = .;
+        _kern_ocram_end = .;
     } > OCRAM
 
 
@@ -248,13 +288,13 @@ SECTIONS
     ASSERT(_heap_end <= ORIGIN(SDRAM) + _sdram_length,
         "heap extends past the end of DDR")
 
-    /* The MMU L2 split maps [_itext_start, _itext_end) cacheable and every other OCRAM
+    /* The MMU L2 split maps [_kern_ocram_start, _kern_ocram_end) cacheable and every other OCRAM
        sub-block device, at 4096-byte granularity. Each boundary must be 4096-byte aligned
        or one page straddles cacheable code and device data -> uncached code, or cached
        (JTAG-incoherent) data. */
     /* Self-boot: the reset vector MUST be at the boot-ROM landing (ORIGIN(OCRAM)),
        and the mkpimage header hole MUST be at image offset 0x40. */
-    ASSERT(_itext_start == ORIGIN(OCRAM),
+    ASSERT(_kern_ocram_start == ORIGIN(OCRAM),
         "reset vector table is not at the OCRAM base (boot ROM branches to ORIGIN(OCRAM))")
     ASSERT(_preloader_header == ORIGIN(OCRAM) + 0x40,
         "mkpimage header hole is not at image offset 0x40")
@@ -274,10 +314,10 @@ SECTIONS
         "SDRAM host_shared exceeds its 1MB Device block")
     ASSERT(_host_shared_sdram_end <= ORIGIN(SDRAM) + _sdram_length,
         "SDRAM host_shared extends past the end of DDR")
-    ASSERT((_itext_start & (0x1000 - 1)) == 0,
-        "itext (code) does not start on a 4096-byte page boundary")
-    ASSERT((_itext_end & (0x1000 - 1)) == 0,
-        "itext (code) does not end on a 4096-byte page boundary")
+    ASSERT((_kern_ocram_start & (0x1000 - 1)) == 0,
+        "kern_ocram (code) does not start on a 4096-byte page boundary")
+    ASSERT((_kern_ocram_end & (0x1000 - 1)) == 0,
+        "kern_ocram (code) does not end on a 4096-byte page boundary")
     ASSERT((_data_start & (0x1000 - 1)) == 0,
         "data does not start on a 4096-byte page boundary")
 

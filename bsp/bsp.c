@@ -303,22 +303,23 @@ static void set_ttb_ptrs(void)
 void cpu0_startup(void)
 {
 #if ENABLE_SMP
-    while (!g_cpu1_ready){}    /* wait for CPU1 in its spin loop before the remap below */
+    while (!g_cpu1_ready){}
 #endif
 
-    bsp_sdram_init();               /* PLL/scan-mgr/SDRAM/NIC301 -- prime self-boot suspect */
+    bsp_sdram_init();
     bsp_precache_init();
     build_tables();
     set_ttb_ptrs();
+
+    pmu_init();
+    load_from_sd();
+
     cpu0_gic_init();
 #if !USE_FREERTOS
     cpu0_timer_start();   /* FreeRTOS arms the tick itself via vConfigureTickInterrupt */
 #endif
+    heap_init();
 
-    pmu_init();
-    heap_init();        // must precede psched_init(): it kMalloc's main_thread + the deque
-
-    load_from_sd();
 
 
 #if ENABLE_SMP
@@ -341,15 +342,14 @@ void cpu0_startup(void)
 
 #if !USE_FREERTOS
 #if USE_FIQ
-    __asm__ volatile ("cpsie if\n\t");   /* unmask FIQ (the tick) + IRQ before psched_init's SMP SGI handshake */
+    __asm__ volatile ("cpsie if\n\t");
 #else
     __asm__ volatile ("cpsie i\n\t");
 #endif
 
     psched_init();
 #endif
-    /* USE_FREERTOS: return with interrupts still masked; main() -> freertos_main()
-     * -> vTaskStartScheduler() enables them when the first task is restored. */
+
 }
 
 
@@ -360,7 +360,7 @@ void cpu1_startup(void)
     set_ttb_ptrs();
     cpu1_gic_init();
 #if !USE_FREERTOS
-    cpu1_timer_start();   /* single-core FreeRTOS: CPU1 gets no tick, idles in cpu1_main */
+    cpu1_timer_start(); //Don't use second core in FreeRTOS tests
 #endif
     pmu_init();
 }
