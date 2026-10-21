@@ -25,6 +25,12 @@ static inline int in_range(int curr_index, int index)
     return index < curr_index;
 }
 
+static inline void set_item_index(heap_t* heap, int index)
+{
+    if (heap->heap[index].type == TYPE_THREAD)
+        ((thread_t*)heap->heap[index].item)->md.heap_index = index;
+}
+
 
 static inline void min_heap_percolate_up(heap_t* heap, int index)
 {
@@ -38,8 +44,8 @@ static inline void min_heap_percolate_up(heap_t* heap, int index)
         heap->heap[index] = heap->heap[parent_index];
         heap->heap[parent_index] = tmp;
 
-        heap->heap[index].thread->md.heap_index = index;
-        heap->heap[parent_index].thread->md.heap_index = parent_index;
+        set_item_index(heap, index);
+        set_item_index(heap, parent_index);
 
         return min_heap_percolate_up(heap, parent_index);
     }
@@ -74,8 +80,8 @@ static inline void min_heap_percolate_down(heap_t* heap, int index)
         heap->heap[index] = min_order_node;
         heap->heap[right_child_index] = tmp;
 
-        heap->heap[index].thread->md.heap_index = index;
-        heap->heap[right_child_index].thread->md.heap_index = right_child_index;
+        set_item_index(heap, index);
+        set_item_index(heap, right_child_index);
 
         return min_heap_percolate_down(heap, right_child_index);
     }
@@ -86,8 +92,8 @@ static inline void min_heap_percolate_down(heap_t* heap, int index)
         heap->heap[index] = min_order_node;
         heap->heap[left_child_index] = tmp;
 
-        heap->heap[index].thread->md.heap_index = index;
-        heap->heap[left_child_index].thread->md.heap_index = left_child_index;
+        set_item_index(heap, index);
+        set_item_index(heap, left_child_index);
 
         return min_heap_percolate_down(heap, left_child_index);
     }
@@ -97,17 +103,18 @@ static inline void min_heap_percolate_down(heap_t* heap, int index)
 }
 
 
-heap_op_e min_heap_insert_node(heap_t* heap, thread_t* thread, uint32_t order)
+heap_op_e min_heap_insert_node(heap_t* heap, void* item, uint32_t order, heap_type_e type)
 {
 
     if (heap->curr_index < MAX_THREADS)
     {
         heap_node_t node;
-        node.thread = thread;
+        node.item = item;
         node.order = order;
+        node.type = type;
 
         heap->heap[heap->curr_index] = node;
-        node.thread->md.heap_index = heap->curr_index;
+        set_item_index(heap, heap->curr_index);
 
         min_heap_percolate_up(heap, heap->curr_index++);
         return OP_OK;
@@ -122,13 +129,13 @@ heap_op_e min_heap_remove_head(heap_t* heap)
     if (heap->curr_index == 1)
     {
         heap->curr_index--;
-        return OP_OK; 
+        return OP_OK;
     }
 
     else if (heap->curr_index > 1)
     {
         heap->heap[0] = heap->heap[--heap->curr_index];
-        heap->heap[0].thread->md.heap_index = 0;
+        set_item_index(heap, 0);
 
         min_heap_percolate_down(heap, 0);
         return OP_OK;
@@ -151,7 +158,7 @@ heap_op_e min_heap_remove_node(heap_t* heap, size_t index)
     else if (heap->curr_index > 1)
     {
         heap->heap[index] = heap->heap[--heap->curr_index];
-        heap->heap[index].thread->md.heap_index = index;
+        set_item_index(heap, index);
 
         size_t parent_index = find_parent_index(index);
         if (heap->heap[index].order < heap->heap[parent_index].order) min_heap_percolate_up(heap, index);
@@ -180,24 +187,23 @@ heap_op_e min_heap_balance_node(heap_t* heap, size_t index, uint32_t order)
 }
 
 
-heap_op_e min_heap_pop_heap(heap_t* heap, thread_t** thread)
+heap_op_e min_heap_pop_heap(heap_t* heap, void** item)
 {
     if (heap->curr_index > 0)
     {
         heap_node_t node = heap->heap[0];
         if(min_heap_remove_head(heap) == OP_FAILED) return OP_FAILED;
 
-        *thread = node.thread;
+        *item = node.item;
         return OP_OK;
     }
 
     else
     {
-        *thread = NULL;
+        *item = NULL;
         return OP_FAILED;
     }
 }
-
 
 
 
@@ -225,8 +231,8 @@ static inline void max_heap_percolate_up(heap_t* heap, int index)
         heap->heap[index] = heap->heap[parent_index];
         heap->heap[parent_index] = tmp;
 
-        heap->heap[index].thread->md.heap_index = index;
-        heap->heap[parent_index].thread->md.heap_index = parent_index;
+        set_item_index(heap, index);
+        set_item_index(heap, parent_index);
 
         return max_heap_percolate_up(heap, parent_index);
     }
@@ -261,8 +267,8 @@ static inline void max_heap_percolate_down(heap_t* heap, int index)
         heap->heap[index] = min_order_node;
         heap->heap[right_child_index] = tmp;
 
-        heap->heap[index].thread->md.heap_index = index;
-        heap->heap[right_child_index].thread->md.heap_index = right_child_index;
+        set_item_index(heap, index);
+        set_item_index(heap, right_child_index);
 
         return max_heap_percolate_down(heap, right_child_index);
     }
@@ -273,8 +279,8 @@ static inline void max_heap_percolate_down(heap_t* heap, int index)
         heap->heap[index] = min_order_node;
         heap->heap[left_child_index] = tmp;
 
-        heap->heap[index].thread->md.heap_index = index;
-        heap->heap[left_child_index].thread->md.heap_index = left_child_index;
+        set_item_index(heap, index);
+        set_item_index(heap, left_child_index);
 
         return max_heap_percolate_down(heap, left_child_index);
     }
@@ -284,17 +290,18 @@ static inline void max_heap_percolate_down(heap_t* heap, int index)
 }
 
 
-heap_op_e max_heap_insert_node(heap_t* heap, thread_t* thread, uint32_t order)
+heap_op_e max_heap_insert_node(heap_t* heap, void* item, uint32_t order, heap_type_e type)
 {
 
     if (heap->curr_index < MAX_THREADS)
     {
         heap_node_t node;
-        node.thread = thread;
+        node.item = item;
         node.order = order;
+        node.type = type;
 
         heap->heap[heap->curr_index] = node;
-        node.thread->md.heap_index = heap->curr_index;
+        set_item_index(heap, heap->curr_index);
 
         max_heap_percolate_up(heap, heap->curr_index++);
         return OP_OK;
@@ -309,13 +316,13 @@ heap_op_e max_heap_remove_head(heap_t* heap)
     if (heap->curr_index == 1)
     {
         heap->curr_index--;
-        return OP_OK; 
+        return OP_OK;
     }
 
     else if (heap->curr_index > 1)
     {
         heap->heap[0] = heap->heap[--heap->curr_index];
-        heap->heap[0].thread->md.heap_index = 0;
+        set_item_index(heap, 0);
 
         max_heap_percolate_down(heap, 0);
         return OP_OK;
@@ -338,7 +345,7 @@ heap_op_e max_heap_remove_node(heap_t* heap, size_t index)
     else if (heap->curr_index > 1)
     {
         heap->heap[index] = heap->heap[--heap->curr_index];
-        heap->heap[index].thread->md.heap_index = index;
+        set_item_index(heap, index);
 
         size_t parent_index = find_parent_index(index);
         if (heap->heap[index].order > heap->heap[parent_index].order) max_heap_percolate_up(heap, index);
@@ -367,20 +374,22 @@ heap_op_e max_heap_balance_node(heap_t* heap, size_t index, uint32_t order)
 }
 
 
-heap_op_e max_heap_pop_heap(heap_t* heap, thread_t** thread)
+heap_op_e max_heap_pop_heap(heap_t* heap, void** item, heap_type_e type)
 {
+    (void)type;
+
     if (heap->curr_index > 0)
     {
         heap_node_t node = heap->heap[0];
         if(max_heap_remove_head(heap) == OP_FAILED) return OP_FAILED;
 
-        *thread = node.thread;
+        *item = node.item;
         return OP_OK;
     }
 
     else
     {
-        *thread = NULL;
+        *item = NULL;
         return OP_FAILED;
     }
 }
