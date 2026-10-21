@@ -80,6 +80,25 @@ Here are some specific numbers which may be important in certain contexts:
 - L1 I-Cache Size: 32768 bytes (32 KiB, 4-way set-associative)
 - L1 D-Cache Size: 32768 bytes (32 KiB, 4-way set-associative, 32-byte lines)
 
+Every hardware block that isn't the A9 core itself sits at a fixed address in the system's address map. You talk to each one by reading and writing its registers at these addresses. These are the DE1-SoC (Cyclone V) values; the emulated QEMU board differs (its shared-peripheral region starts at `0x1E000000` instead of `0xFFFEC000`).
+
+The shared-peripheral region (one block of hardware bolted onto the dual-core A9, base `0xFFFEC000`):
+- Snoop Control Unit, keeps the two cores' L1 caches in sync: `0xFFFEC000`
+- Interrupt controller, the per-core side where a core reads and acknowledges the interrupt it was handed (GIC CPU interface): `0xFFFEC100`
+- Global timer, the counter whose comparator fires the scheduler tick: `0xFFFEC200`
+- Interrupt controller, the shared side that decides which core each interrupt goes to (GIC distributor): `0xFFFED000`
+- L2 cache controller (PL310): `0xFFFEF000`
+
+The rest of the chip's hardware (the "HPS" peripherals):
+- SD card controller, reads/writes the microSD card: `0xFF704000`
+- SDRAM controller, brings up and configures the off-chip RAM: `0xFFC25000` (the register block it fills starts at `0xFFC20000`)
+- Clock Manager, the PLLs and clock dividers: `0xFFD04000`
+- Reset Manager, holds blocks (and the second core) in or out of reset: `0xFFD05000`
+- System Manager, misc. system glue, including where the second core starts executing: `0xFFD08000`
+- Scan Manager, used during SDRAM I/O calibration: `0xFFF02000`
+- Watchdog timer 0, resets the chip if we stop feeding it: `0xFFD02000`
+- L3 interconnect remap register, switches address `0x0` from boot ROM over to SDRAM: `0xFF800000`
+
 
 
 ## Boot Sequence

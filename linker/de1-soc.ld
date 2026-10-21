@@ -47,7 +47,7 @@ _l3_boot_region_end = 0x00100000;   /* 1048576 bytes */
 SECTIONS
 {
 
-  /* 4096 l1 sections at 1MB each; 256 l2 pages at 2^12 bytes each to cover the unmapped zone 
+  /* 4096 l1 sections at 1MB each; 256 l2 pages at 2^2 bytes each to cover the unmapped zone 
    * */ 
     
     .mmu_tables ORIGIN(SDRAM) (NOLOAD) :

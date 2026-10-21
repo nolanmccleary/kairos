@@ -85,11 +85,11 @@ extern char _appcode_end[];
 /* Make a region that was written through the data side fetchable as code: clean
  * D-cache to the point of unification over the range, then invalidate I-cache and
  * the branch predictor. A9 cache line = 32 bytes. */
-static void sync_icache_region(uintptr_t start, uintptr_t end)
+static void make_region_executable(uintptr_t start, uintptr_t end)
 {
     for (uintptr_t a = (start & ~31u); a < end; a += 32u)
     {
-        __asm__ volatile ("mcr p15, 0, %0, c7, c11, 1" :: "r"(a) : "memory");  /* DCCMVAU */
+        __asm__ volatile ("mcr p15, 0, %0, c7, c11, 1" :: "r"(a) : "memory"); //Clear data cache for this region specifically 
     }
 
     __asm__ volatile (
@@ -137,7 +137,7 @@ static int read_block(uint32_t lba, uint32_t* dst)
         uint32_t avail = STATUS_FIFO_COUNT(SD_R(SDMMC_STATUS));
         while (avail-- > 0u && got < SD_BLOCK_WORDS)
         {
-            dst[got++] = SD_R(SDMMC_FIFODATA);
+            dst[got++] = SD_R(SDMMC_FIFODATA); //SD_R declared volatile so actuating this reg advances sd hardware.
         }
     }
 
@@ -200,5 +200,5 @@ void load_from_sd(void)
         }
     }
 
-    sync_icache_region((uintptr_t)_appcode_start, (uintptr_t)_appcode_end);
+    make_region_executable((uintptr_t)_appcode_start, (uintptr_t)_appcode_end);
 }

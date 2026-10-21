@@ -2,7 +2,6 @@
 #include "cpu.h"
 #include "aux.h"
 #include "telemetry.h"
-#include "fault.h"
 
 
 HOST_SHARED_OCRAM volatile uint32_t g_cpu_mailbox_uncached;
@@ -10,6 +9,7 @@ HOST_SHARED_OCRAM volatile uint32_t g_cpu_mailbox_uncached;
 
 cpu_t g_cpus[NUM_CPUS];
 
+//TODO: Rename thread mutex ot core mutex
 
 inline cpu_core_e curr_core(void)
 {
@@ -36,6 +36,18 @@ void update_utilization(thread_t* thread)
         g_cpus[core].utilization += u;
         thread->metrics.prev_u = u;
     }
+}
+
+static cpu_core_e tie_default = CPU0;
+inline cpu_core_e least_loaded_core(void)
+{
+
+    if (g_cpus[CPU0].utilization < g_cpus[CPU1].utilization) return CPU0;
+    if (g_cpus[CPU1].utilization < g_cpus[CPU0].utilization) return CPU1;
+
+    cpu_core_e core = tie_default;
+    tie_default = (tie_default == CPU0) ? CPU1 : CPU0;
+    return core;
 }
 
 

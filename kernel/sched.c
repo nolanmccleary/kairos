@@ -18,8 +18,10 @@
 #include "telemetry.h"
 
 
-static heap_t heap1[NUM_CPUS];
-static heap_t heap2[NUM_CPUS];
+// heap_t irqHeaps[NUM_CPUS]; TODO: Re-Enable after migration
+
+static heap_t deadHeaps[NUM_CPUS];
+static heap_t relHeaps[NUM_CPUS];
 static thread_fifo_t incoming_fifos[NUM_CPUS];
 static thread_fifo_t outgoing_fifos[NUM_CPUS];
 static thread_fifo_t low_fifos[NUM_CPUS];
@@ -131,7 +133,7 @@ static inline bool next_up(cpu_core_e core)
         else
         {
             thread->md.owner = DEAD_HEAP;
-            insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline);
+            min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline);
         }
     }
 
@@ -139,10 +141,10 @@ static inline bool next_up(cpu_core_e core)
 
     while (g_cpus[core].relHeap->curr_index > 0 && geq_wrapped(g_cpus[core].ticks, g_cpus[core].relHeap->heap[0].thread->timing.release_time))
     {
-        pop_heap(g_cpus[core].relHeap, &thread);
+        min_heap_pop_heap(g_cpus[core].relHeap, &thread);
 
         thread->md.owner = DEAD_HEAP;
-        insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline);
+        min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline);
     }
 
     while(g_cpus[core].deadHeap->curr_index > 0)
@@ -177,18 +179,18 @@ static inline bool next_up(cpu_core_e core)
 
                 if (lt_wrapped(g_cpus[core].ticks, thread->timing.release_time))
                 {
-                    remove_head(g_cpus[core].deadHeap);
+                    min_heap_remove_head(g_cpus[core].deadHeap);
                     thread->md.owner = REL_HEAP;
-                    insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time);
+                    min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time);
                 }
 
-                else balance_node(g_cpus[core].deadHeap, thread->md.heap_index, thread->timing.deadline);
+                else min_heap_balance_node(g_cpus[core].deadHeap, thread->md.heap_index, thread->timing.deadline);
                 continue;
             }
 
             else if (thread->md.periodicity == APERIODIC)
             {
-                remove_head(g_cpus[core].deadHeap);
+                min_heap_remove_head(g_cpus[core].deadHeap);
                 thread->md.owner = OUTGOING_THREADS;
                 fifo_push(g_cpus[core].outgoing_threads, thread);
                 continue;
@@ -412,10 +414,10 @@ sys_exit_e psched_core_init(void)
     g_cpus[core].ticks = 0;
     g_cpus[core].missed_deadlines = 0;
 
-    g_cpus[core].deadHeap = &heap1[core];
+    g_cpus[core].deadHeap = &deadHeaps[core];
     g_cpus[core].deadHeap->curr_index = 0;
 
-    g_cpus[core].relHeap = &heap2[core];
+    g_cpus[core].relHeap = &relHeaps[core];
     g_cpus[core].relHeap->curr_index = 0;
 
     g_cpus[core].utilization = 0;
@@ -450,10 +452,17 @@ sys_exit_e psched_core_init(void)
     g_cpus[core].main_thread->id = IDLE_ID;
     init_metrics(g_cpus[core].main_thread);
     g_cpus[core].curr_thread = g_cpus[core].main_thread;
-    g_cpus[core].sched_init = true;
     g_cpus[core].request_terminate = false;
 
+    g_cpus[core].sched_init = true;
     unlock_mutex(&(g_cpus[core].thread_mutex));
+
+
+    // lock_mutex_persistent(&g_cpus[core].irq_mutex);
+    // g_cpus[core].irqHeap = &irqHeaps[core];
+    // g_cpus[core].irqHeap->curr_index = 0;
+    // unlock_mutex(&g_cpus[core].irq_mutex);
+
 
     __asm__ __volatile__("dmb sy" ::: "memory");
 
@@ -546,17 +555,6 @@ static inline thread_t* enqueue_new_thread(cpu_core_e core, sys_exit_e (*func)(v
 }
 
 
-static inline cpu_core_e least_loaded_core(void)
-{
-    static cpu_core_e tie_default = CPU0;
-
-    if (g_cpus[CPU0].utilization < g_cpus[CPU1].utilization) return CPU0;
-    if (g_cpus[CPU1].utilization < g_cpus[CPU0].utilization) return CPU1;
-
-    cpu_core_e core = tie_default;
-    tie_default = (tie_default == CPU0) ? CPU1 : CPU0;
-    return core;
-}
 
 
 thread_t* add_periodic_thread(sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
@@ -661,13 +659,13 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
             if (thread->md.owner == DEAD_HEAP)
             {
                 thread->md.owner = REL_HEAP;
-                remove_node(g_cpus[core].deadHeap, thread->md.heap_index);
-                insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time);
+                min_heap_remove_node(g_cpus[core].deadHeap, thread->md.heap_index);
+                min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time);
             }
 
             else if(thread->md.owner == REL_HEAP)
             {
-                balance_node(g_cpus[core].relHeap, thread->md.heap_index, thread->timing.release_time);
+                min_heap_balance_node(g_cpus[core].relHeap, thread->md.heap_index, thread->timing.release_time);
             }
         }
     }
@@ -728,7 +726,7 @@ inline void next_thread()
     thread_t* sched_prev = g_cpus[core].curr_thread;
 #endif
 
-    if (lock_mutex_best_effort(&(g_cpus[core].thread_mutex)) == LOCK_OK)
+    if (lock_mutex_best_effort(&(g_cpus[core].thread_mutex)) == LOCK_OK) //TODO: Move this to c_irq_handler
     {
         if (g_cpus[core].sched_init && !g_cpus[core].request_terminate)
         {

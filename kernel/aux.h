@@ -24,6 +24,11 @@ static inline bool lt_wrapped(uint32_t a, uint32_t b)
     return ((int32_t)(a - b) < 0);
 }
 
+static inline bool leq_wrapped(uint32_t a, uint32_t b)
+{
+    return ((int32_t)(a - b) <= 0);
+}
+
 
 #endif
 

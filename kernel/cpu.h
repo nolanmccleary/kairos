@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "irq.h"
+// #include "irq.h"
 #include "lock.h"
 #include "min_heap.h"
 #include "thread.h"
@@ -27,6 +27,18 @@
 #endif
 
 
+typedef enum
+{
+    CPU_PSCHED_INIT_REQUEST,
+    CPU_PSCHED_INIT_ACK,
+    CPU_PSCHED_DEINIT_REQUEST,
+    CPU_PSCHED_DEINIT_ACK,
+    CPU_IRQ_PING,
+    CPU_MUTEX_HOLD,
+}   cpu_sgi_e;
+
+
+
 typedef struct
 {
     _Alignas(32) volatile bool sched_init;
@@ -38,15 +50,22 @@ typedef struct
     uint32_t avg_scheduler_overhead;
 
     //Sched specific
+    heap_t* irqHeap;
+
     heap_t* deadHeap;
     heap_t* relHeap;
+    
+    //TODO: Maybe array-ify this
     thread_fifo_t* lowFifo;
     thread_fifo_t* medFifo;
     thread_fifo_t* highFifo;
 
     thread_t* curr_thread;
     thread_t* main_thread;
-    mutex_t thread_mutex;
+    
+    mutex_t thread_mutex; //TODO: Rename to core mutex. we can then add thread and irq subsection mutexes later
+    mutex_t irq_mutex;
+
     bool request_terminate;
 
     thread_fifo_t* incoming_threads;
@@ -58,6 +77,9 @@ typedef struct
 extern volatile uint32_t g_cpu_mailbox_uncached;
 extern cpu_t g_cpus[NUM_CPUS];
 
+
+
+cpu_core_e least_loaded_core(void);
 
 cpu_core_e curr_core(void);
 void update_cpu_scheduler_overhead(cpu_core_e cpu, uint32_t overhead);

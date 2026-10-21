@@ -5,6 +5,7 @@
 #include "timers.h"
 #include "sched.h"
 #include "ktrace.h"
+#include "min_heap.h"
 
 
 void c_irq_handler(int id)
@@ -64,13 +65,56 @@ void c_irq_handler(int id)
 void c_fiq_handler(int id)
 {
 #if USE_FIQ
-    /* USE_FIQ: every GIC interrupt (the tick and the SMP SGIs) arrives as an FIQ because
-     * GICC_CTLR.FIQEn is set and all interrupts stay in Group 0. Dispatch is identical to
-     * the IRQ build, so just hand it to c_irq_handler. The full-context FIQ entry in
-     * kernel.s already saved the interrupted thread, so a tick can switch. */
-    c_irq_handler(id);
+    c_irq_handler(id);  //Right now FIQ is configured to route through IRQ handler if enabled
 #else
     (void)id;
 #endif
 }
+
+
+
+
+sys_exit_e mount_tick_irq(heap_t* heap, thread_t* ctx)
+{
+    cpu_core_e core = least_loaded_core();
+    ctx->core = core;
+    mount_tick_irq_to_core(heap, ctx);
+    return SYS_OK;
+}
+
+
+sys_exit_e mount_tick_irq_to_core(heap_t* heap, thread_t* ctx)
+{
+    cpu_core_e core = ctx->core;
+
+    lock_mutex_persistent(&g_cpus[core].thread_mutex);
+    
+
+
+
+
+    unlock_mutex(&g_cpus[core].thread_mutex);
+
+    return SYS_OK;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

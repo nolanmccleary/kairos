@@ -28,12 +28,16 @@ typedef struct
 }   heap_t;
 
 
-heap_op_e insert_node(heap_t* heap, thread_t* thread, uint32_t order);
-heap_op_e remove_head(heap_t* heap);
-heap_op_e remove_node(heap_t* heap, size_t index);
-heap_op_e balance_node(heap_t* heap, size_t index, uint32_t order);
-heap_op_e pop_heap(heap_t* heap, thread_t** thread);
-
+heap_op_e min_heap_insert_node(heap_t* heap, thread_t* thread, uint32_t order);
+heap_op_e min_heap_remove_head(heap_t* heap);
+heap_op_e min_heap_remove_node(heap_t* heap, size_t index);
+heap_op_e min_heap_balance_node(heap_t* heap, size_t index, uint32_t order);
+heap_op_e min_heap_pop_heap(heap_t* heap, thread_t** thread);
+heap_op_e max_heap_insert_node(heap_t* heap, thread_t* thread, uint32_t order);
+heap_op_e max_heap_remove_head(heap_t* heap);
+heap_op_e max_heap_remove_node(heap_t* heap, size_t index);
+heap_op_e max_heap_balance_node(heap_t* heap, size_t index, uint32_t order);
+heap_op_e max_heap_pop_heap(heap_t* heap, thread_t** thread);
 
 #endif
 
