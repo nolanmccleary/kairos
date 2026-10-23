@@ -1,6 +1,3 @@
-/* Kairos scheduler: a hybrid Earliest-Deadline-First + round-robin policy, driven once
- * per tick from the IRQ handler (next_thread). EDF tasks run from twin min-heaps (one by
- * deadline, one by release time); round-robin persistent tasks fill the slack. */
 #include <stddef.h>
 #include <stdint.h>
 #include "aux.h"
@@ -91,6 +88,53 @@ static inline void prime_thread(thread_t* thread)
 }
 
 
+
+static inline bool check_fifos(cpu_core_e core, thread_t* thread, thread_fifo_t* fifo)
+{
+    bool thread_found = false;
+    fifo = g_cpus[core].highFifo;
+
+    while (fifo->size > 0)
+    {
+        thread = fifo->fifo[fifo->start];
+
+        if (thread->md.status != FINISHED)
+        {
+            thread->timing.ticks_landed++;
+
+            if (geq_wrapped(g_cpus[core].ticks, thread->timing.deadline))
+            {
+                thread->timing.release_time = g_cpus[core].ticks;
+                thread->timing.deadline = g_cpus[core].ticks + thread->timing.period;
+
+                //Will switch when <period> ticks spent inside thread; Persistent thread may be preempted by periodic halfway through for example
+                //When available to run again we should go back to the last persistent thread that was filling its window.
+                if (fifo->size > 1 && thread->timing.ticks_landed >= thread->timing.period)
+                {
+                    thread->timing.ticks_landed = 0;
+                    fifo_push(fifo, fifo_pop(fifo));
+                    continue;
+                }
+            }
+
+
+            g_cpus[core].curr_thread = thread;
+            thread_found = true;
+            break;
+        }
+
+        else 
+        {
+            thread->md.status = REMOVED;
+            fifo_pop(fifo);
+        }
+    }
+
+    return thread_found;
+}
+
+
+
 //Assumes thread lock held before invocation
 static inline bool next_up(cpu_core_e core)
 {
@@ -138,7 +182,7 @@ static inline bool next_up(cpu_core_e core)
         else
         {
             thread->md.owner = DEAD_HEAP;
-            min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline, TYPE_THREAD);
+            min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline);
         }
     }
 
@@ -149,7 +193,7 @@ static inline bool next_up(cpu_core_e core)
         min_heap_pop_heap(g_cpus[core].relHeap, (void**)&thread);
 
         thread->md.owner = DEAD_HEAP;
-        min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline, TYPE_THREAD);
+        min_heap_insert_node(g_cpus[core].deadHeap, thread, thread->timing.deadline);
     }
 
     while(g_cpus[core].deadHeap->curr_index > 0)
@@ -179,7 +223,7 @@ static inline bool next_up(cpu_core_e core)
                 {
                     min_heap_remove_head(g_cpus[core].deadHeap);
                     thread->md.owner = REL_HEAP;
-                    min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time, TYPE_THREAD);
+                    min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time);
                 }
 
                 else min_heap_balance_node(g_cpus[core].deadHeap, thread->md.index, thread->timing.deadline);
@@ -215,135 +259,26 @@ static inline bool next_up(cpu_core_e core)
         else if (thread->md.status != FINISHED) raise_error("next_up: thread status corrupted");
     }
 
-
     thread_fifo_t* fifo;
 
-
-    //Yes I know this is repeated code
     if (!thread_found)
     {
-        fifo = g_cpus[core].highFifo;
-
-        while (fifo->size > 0)
-        {
-            thread = fifo->fifo[fifo->start];
-
-            if (thread->md.status != FINISHED)
-            {
-                thread->timing.ticks_landed++;
-
-                if (geq_wrapped(g_cpus[core].ticks, thread->timing.deadline))
-                {
-                    thread->timing.release_time = g_cpus[core].ticks;
-                    thread->timing.deadline = g_cpus[core].ticks + thread->timing.period;
-
-                    //Will switch when <period> ticks spent inside thread; Persistent thread may be preempted by periodic halfway through for example
-                    //When available to run again we should go back to the last persistent thread that was filling its window.
-                    if (fifo->size > 1 && thread->timing.ticks_landed >= thread->timing.period)
-                    {
-                        thread->timing.ticks_landed = 0;
-                        fifo_push(fifo, fifo_pop(fifo));
-                        continue;
-                    }
-                }
-
-
-                g_cpus[core].curr_thread = thread;
-                thread_found = true;
-                break;
-            }
-
-            else 
-            {
-                thread->md.owner = REMOVED;
-                fifo_pop(fifo);
-            }
-        }
+        thread_found = check_fifos(core, thread, g_cpus[core].highFifo);
     }
-
-
-   if (!thread_found)
-    {
-        fifo = g_cpus[core].medFifo;
-
-        while (fifo->size > 0)
-        {
-            thread = fifo->fifo[fifo->start];
-
-            if (thread->md.status != FINISHED)
-            {
-                thread->timing.ticks_landed++;
-
-                if (geq_wrapped(g_cpus[core].ticks, thread->timing.deadline))
-                {
-                    thread->timing.release_time = g_cpus[core].ticks;
-                    thread->timing.deadline = g_cpus[core].ticks + thread->timing.period;
-
-                    if (fifo->size > 1 && thread->timing.ticks_landed >= thread->timing.period)
-                    {
-                        thread->timing.ticks_landed = 0;
-                        fifo_push(fifo, fifo_pop(fifo));
-                        continue;
-                    }
-                }
-
-
-                g_cpus[core].curr_thread = thread;
-                thread_found = true;
-                break;
-            }
-
-            else 
-            {
-                thread->md.owner = REMOVED;
-                fifo_pop(fifo);
-            }
-        }
-    }
-
 
     if (!thread_found)
     {
-        fifo = g_cpus[core].lowFifo;
-
-        while (fifo->size > 0)
-        {
-            thread = fifo->fifo[fifo->start];
-
-            if (thread->md.status != FINISHED)
-            {
-                thread->timing.ticks_landed++;
-
-                if (geq_wrapped(g_cpus[core].ticks, thread->timing.deadline))
-                {
-                    thread->timing.release_time = g_cpus[core].ticks;
-                    thread->timing.deadline = g_cpus[core].ticks + thread->timing.period;
-
-                    if (fifo->size > 1 && thread->timing.ticks_landed >= thread->timing.period)
-                    {
-                        thread->timing.ticks_landed = 0;
-                        fifo_push(fifo, fifo_pop(fifo));
-                        continue;
-                    }
-                }
-
-
-                g_cpus[core].curr_thread = thread;
-                thread_found = true;
-                break;
-            }
-
-            else 
-            {
-                thread->md.owner = REMOVED;
-                fifo_pop(fifo);
-            }
-        }
+        thread_found = check_fifos(core, thread, g_cpus[core].medFifo);
     }
 
+    if (!thread_found)
+    {
+        thread_found = check_fifos(core, thread, g_cpus[core].lowFifo);
+    }
 
     return thread_found;
 }
+
 
 
 static void thread_exit()
@@ -413,12 +348,13 @@ sys_exit_e psched_core_init(void)
 
     g_cpus[core].deadHeap = &deadHeaps[core];
     g_cpus[core].deadHeap->curr_index = 0;
+    g_cpus[core].deadHeap->type = TYPE_THREAD;
 
     g_cpus[core].relHeap = &relHeaps[core];
     g_cpus[core].relHeap->curr_index = 0;
+    g_cpus[core].relHeap->type = TYPE_THREAD;
 
     g_cpus[core].utilization = 0;
-
 
     g_cpus[core].incoming_threads = &incoming_fifos[core];
     g_cpus[core].lowFifo = &low_fifos[core];
@@ -451,9 +387,9 @@ sys_exit_e psched_core_init(void)
 
     g_cpus[core].sched_init = true;
 
-
     g_cpus[core].irqHeap = &irqHeaps[core];
     g_cpus[core].irqHeap->curr_index = 0;
+    g_cpus[core].irqHeap->type = TYPE_IRQ;
 
     g_cpus[core].avail = avails[core];
     memzero(g_cpus[core].avail, MAX_IRQS * sizeof(irq_t*));
@@ -653,6 +589,7 @@ sys_exit_e kill_thread(thread_t* thread)
 }
 
 
+
 sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
 {
     cpu_core_e core = thread->core;
@@ -688,7 +625,7 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
             {
                 thread->md.owner = REL_HEAP;
                 min_heap_remove_node(g_cpus[core].deadHeap, thread->md.index);
-                min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time, TYPE_THREAD);
+                min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time);
             }
 
             else if(thread->md.owner == REL_HEAP)
@@ -736,127 +673,120 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
         __builtin_unreachable();
     }
 
-
     else unlock_mutex(&(g_cpus[core].core_mutex));
-
 
     resume:
         return ret;
 }
 
 
-inline void next_thread()
+inline void next_thread(cpu_core_e core)
 {
     uint32_t overhead = pmu_cycles();
-    cpu_core_e core = curr_core();
 
 #ifdef MODE_TEST
     thread_t* sched_prev = g_cpus[core].curr_thread;
 #endif
 
-    if (lock_mutex_best_effort(&(g_cpus[core].core_mutex)) == LOCK_OK) //TODO: Move this to c_irq_handler
+    if (g_cpus[core].sched_init && !g_cpus[core].request_terminate)
     {
-        if (g_cpus[core].sched_init && !g_cpus[core].request_terminate)
+        switch_out(g_cpus[core].curr_thread);
+        update_utilization(g_cpus[core].curr_thread);
+
+        g_cpus[core].ticks++;
+
+        SAVE_SYS_SP(g_cpus[core].curr_thread->sp);
+
+
+#ifdef MODE_TEST
+        /*
+        * Python finished sampling the current EDF trial.
+        *
+        * At overload, EDF may otherwise starve main forever.
+        * Force main in once so KTRACE_WAIT_RELEASE() can observe
+        * g_test_release and return.
+        */
+        if (KTRACE_RELEASE_PENDING())
         {
-            switch_out(g_cpus[core].curr_thread);
-            update_utilization(g_cpus[core].curr_thread);
+            g_cpus[core].curr_thread = g_cpus[core].main_thread;
 
-            g_cpus[core].ticks++;
+            LOAD_SYS_SP(g_cpus[core].main_thread->sp);
 
-            SAVE_SYS_SP(g_cpus[core].curr_thread->sp);
-
-
-#ifdef MODE_TEST
-            /*
-            * Python finished sampling the current EDF trial.
-            *
-            * At overload, EDF may otherwise starve main forever.
-            * Force main in once so KTRACE_WAIT_RELEASE() can observe
-            * g_test_release and return.
-            */
-            if (KTRACE_RELEASE_PENDING())
-            {
-                g_cpus[core].curr_thread = g_cpus[core].main_thread;
-
-                LOAD_SYS_SP(g_cpus[core].main_thread->sp);
-
-                unlock_mutex(&(g_cpus[core].core_mutex));
-                return;
-            }
+            unlock_mutex(&(g_cpus[core].core_mutex));
+            return;
+        }
 #endif
 
 
-            if (!next_up(core)) //Either no valid tasks set or we ran the last one last cycle
-            {
-                g_cpus[core].curr_thread = g_cpus[core].main_thread;
-            }
-
-            switch_in(g_cpus[core].curr_thread);
-
-#ifdef MODE_TEST
-            KTRACE_TICK_EXIT(g_cpus[core].curr_thread);
-#endif
-
-            switch (g_cpus[core].curr_thread->md.status)
-            {
-                case PENDING:
-                    prime_thread(g_cpus[core].curr_thread);
-                    /* fall through */
-
-                case RUNNING:
-                    LOAD_SYS_SP(g_cpus[core].curr_thread->sp);
-                    break;
-
-                default:
-                    raise_error("SCHEDULER: Non-viable thread state obtained following next_up() call");
-                    break;
-            }
+        if (!next_up(core)) //Either no valid tasks set or we ran the last one last cycle
+        {
+            g_cpus[core].curr_thread = g_cpus[core].main_thread;
         }
 
-
-        else if (g_cpus[core].request_terminate && (lock_mutex_best_effort(&g_allocator_mutex) == LOCK_OK))
-        {
-            destroy_threads(g_cpus[core].incoming_threads);
-
-            for (size_t i = 0; i < g_cpus[core].deadHeap->curr_index; i++)
-            {
-                if (g_cpus[core].deadHeap->heap[i].item != NULL)
-                {
-                    ((thread_t*)(g_cpus[core].deadHeap->heap[i].item))->md.status = REMOVED;
-                }
-            }
-            g_cpus[core].deadHeap->curr_index = 0;
-
-            for (size_t i = 0; i < g_cpus[core].relHeap->curr_index; i++)
-            {
-                if (g_cpus[core].relHeap->heap[i].item != NULL)
-                {
-                    ((thread_t*)(g_cpus[core].relHeap->heap[i].item))->md.status = REMOVED;
-                }
-            }
-            g_cpus[core].relHeap->curr_index = 0;
-
-            if (g_cpus[core].curr_thread != g_cpus[core].main_thread)
-            {
-                LOAD_SYS_SP(g_cpus[core].main_thread->sp);
-            }
-            __asm__ __volatile__ ("dmb sy" ::: "memory");
-            kFree(g_cpus[core].main_thread); //Only thread for sure malloced is main thread
-
-            g_cpus[core].sched_init = false;
-            g_cpus[core].request_terminate = false;
-
-            unlock_mutex(&g_allocator_mutex);
-        }
-
-        overhead = pmu_cycles() - overhead;
-        update_cpu_scheduler_overhead(core, overhead); // want to guard inside lock acquisition because bringing avg down in rare case when we cant acquire lock is not useful
+        switch_in(g_cpus[core].curr_thread);
 
 #ifdef MODE_TEST
-        KTRACE_SCHED_COST(overhead, g_cpus[core].curr_thread != sched_prev);
+        KTRACE_TICK_EXIT(g_cpus[core].curr_thread);
 #endif
 
-        unlock_mutex(&(g_cpus[core].core_mutex));
+        switch (g_cpus[core].curr_thread->md.status)
+        {
+            case PENDING:
+                prime_thread(g_cpus[core].curr_thread);
+                /* fall through */
+
+            case RUNNING:
+                LOAD_SYS_SP(g_cpus[core].curr_thread->sp);
+                break;
+
+            default:
+                raise_error("SCHEDULER: Non-viable thread state obtained following next_up() call");
+                break;
+        }
     }
+
+
+    else if (g_cpus[core].request_terminate && (lock_mutex_best_effort(&g_allocator_mutex) == LOCK_OK))
+    {
+        destroy_threads(g_cpus[core].incoming_threads);
+
+        for (size_t i = 0; i < g_cpus[core].deadHeap->curr_index; i++)
+        {
+            if (g_cpus[core].deadHeap->heap[i].item != NULL)
+            {
+                ((thread_t*)(g_cpus[core].deadHeap->heap[i].item))->md.status = REMOVED;
+            }
+        }
+        g_cpus[core].deadHeap->curr_index = 0;
+
+        for (size_t i = 0; i < g_cpus[core].relHeap->curr_index; i++)
+        {
+            if (g_cpus[core].relHeap->heap[i].item != NULL)
+            {
+                ((thread_t*)(g_cpus[core].relHeap->heap[i].item))->md.status = REMOVED;
+            }
+        }
+        g_cpus[core].relHeap->curr_index = 0;
+
+        if (g_cpus[core].curr_thread != g_cpus[core].main_thread)
+        {
+            LOAD_SYS_SP(g_cpus[core].main_thread->sp);
+        }
+        __asm__ __volatile__ ("dmb sy" ::: "memory");
+        kFree(g_cpus[core].main_thread); //Only thread for sure malloced is main thread
+
+        g_cpus[core].sched_init = false;
+        g_cpus[core].request_terminate = false;
+
+        unlock_mutex(&g_allocator_mutex);
+    }
+
+    overhead = pmu_cycles() - overhead;
+    update_cpu_scheduler_overhead(core, overhead); // want to guard inside lock acquisition because bringing avg down in rare case when we cant acquire lock is not useful
+
+#ifdef MODE_TEST
+    KTRACE_SCHED_COST(overhead, g_cpus[core].curr_thread != sched_prev);
+#endif
+
 }
 

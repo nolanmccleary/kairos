@@ -27,7 +27,7 @@ sys_exit_e kill_thread(thread_t* thread); //assumed called from same core for no
 sys_exit_e suspend_thread(thread_t* thread, uint32_t delay);
 
 
-void next_thread(void);
+void next_thread(cpu_core_e core);
 
 
 #endif

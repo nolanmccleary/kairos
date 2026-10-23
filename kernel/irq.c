@@ -1,5 +1,6 @@
 #include "aux.h"
-#include "fault.h"
+#include "cpu.h"
+#include "pmu.h"
 #include "irq.h"
 #include "lock.h"
 #include "bsp.h"
@@ -41,8 +42,13 @@ void c_irq_handler(int id)
 
         case GICD_IRQ:
             // WDT_L4 = 0x76; //Feed WDT
-            GTIMER_ISR = 1; //Timer ISR ACK, when this
-            next_thread();
+            cpu_core_e core = curr_core();
+            if (lock_mutex_best_effort(&(g_cpus[core].core_mutex)) == LOCK_OK)
+            {
+                GTIMER_ISR = 1; //Timer ISR ACK, when this
+                next_thread(core);
+                unlock_mutex(&(g_cpus[core].core_mutex));
+            }
             break;
 
 
@@ -75,20 +81,20 @@ void c_fiq_handler(int id)
 
 
 
-sys_exit_e  mount_tick_irq(irq_t* ctx, sys_exit_e (*func)(void), uint32_t period, uint32_t id)
+sys_exit_e  mount_tick_irq(irq_t* irq, sys_exit_e (*func)(void), uint32_t period, uint32_t id)
 {
     cpu_core_e core = least_loaded_core();
-    mount_tick_irq_to_core(ctx, core, func, period, id);
+    mount_tick_irq_to_core(irq, core, func, period, id);
     return SYS_OK;
 }
 
 
-sys_exit_e  mount_tick_irq_to_core(irq_t* ctx, cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, uint32_t id)
+sys_exit_e  mount_tick_irq_to_core(irq_t* irq, cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, uint32_t id)
 {
-    ctx->core = core;
-    ctx->func = func;
-    ctx->timing.period = period;
-    ctx->id = id;
+    irq->core = core;
+    irq->func = func;
+    irq->timing.period = period;
+    irq->id = id;
 
     lock_mutex_persistent(&g_cpus[core].core_mutex);
     
@@ -118,28 +124,29 @@ sys_exit_e  mount_tick_irq_to_core(irq_t* ctx, cpu_core_e core, sys_exit_e (*fun
 
                     while (lt_wrapped(rel, g_cpus[core].ticks)) rel += next->timing.period;
 
-                    ctx->timing.release_time = rel;
+                    irq->timing.release_time = rel;
                 }
 
                 else //no tick irqs mounted yet 
                 {
-                    ctx->timing.release_time = g_cpus[core].ticks; //Will fire next sched preemption
+                    irq->timing.release_time = g_cpus[core].ticks; //Will fire next sched preemption
                 }
             }
 
             else //space directly behind was taken 
             {
-                ctx->timing.release_time = g_cpus[core].avail[i-1]->timing.release_time + WCET_TICKS;
+                irq->timing.release_time = g_cpus[core].avail[i-1]->timing.release_time + WCET_TICKS;
             }
 
-            g_cpus[core].avail[i] = ctx;
-            ctx->md.avail_index = i;
+            g_cpus[core].avail[i] = irq;
+            irq->md.avail_index = i;
 
             break;
         }
     }
     
-    min_heap_insert_node(g_cpus[core].irqHeap, (void*)ctx, ctx->timing.release_time, TYPE_ISR);
+    min_heap_insert_node(g_cpus[core].irqHeap, (void*)irq, irq->timing.release_time); 
+    irq->md.status = IRQ_ARMED;
 
     unlock_mutex(&g_cpus[core].core_mutex);
     return SYS_OK;
@@ -147,3 +154,30 @@ sys_exit_e  mount_tick_irq_to_core(irq_t* ctx, cpu_core_e core, sys_exit_e (*fun
 
 
 
+sys_exit_e unmount_tick_irq(irq_t* irq)
+{
+    cpu_core_e core = irq->core;
+
+    lock_mutex_persistent(&g_cpus[core].core_mutex);
+
+    min_heap_remove_node(g_cpus[core].irqHeap, irq->md.heap_index);
+    g_cpus[core].avail[irq->md.avail_index] = NULL;
+    irq->md.status = IRQ_REMOVED;
+
+    unlock_mutex(&g_cpus[irq->core].core_mutex);
+    return SYS_OK;
+}
+
+
+
+void irq_switch_in(irq_t* irq)
+{
+    irq->timing.t0 = pmu_cycles(); 
+}
+
+
+
+void irq_switch_out(irq_t* irq)
+{
+    irq->timing.t1 = pmu_cycles(); 
+}

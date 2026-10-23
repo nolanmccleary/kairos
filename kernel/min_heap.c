@@ -2,6 +2,7 @@
 #include "aux.h"
 #include "min_heap.h"
 #include "thread.h"
+#include "irq.h"
 
 
 static inline int find_parent_index(int pos)
@@ -27,8 +28,19 @@ static inline int in_range(int curr_index, int index)
 
 static inline void set_item_index(heap_t* heap, int index)
 {
-    if (heap->heap[index].type == TYPE_THREAD)
-        ((thread_t*)heap->heap[index].item)->md.index = index;
+    switch (heap->type)
+    {
+        case TYPE_THREAD:
+            ((thread_t*)heap->heap[index].item)->md.index = index;
+            break;
+
+        case TYPE_IRQ:
+            ((irq_t*)heap->heap[index].item)->md.heap_index = index;
+            break;
+
+        default:
+            break;
+    }
 }
 
 
@@ -103,7 +115,7 @@ static inline void min_heap_percolate_down(heap_t* heap, int index)
 }
 
 
-heap_op_e min_heap_insert_node(heap_t* heap, void* item, uint32_t order, heap_type_e type)
+heap_op_e min_heap_insert_node(heap_t* heap, void* item, uint32_t order)
 {
 
     if (heap->curr_index < MAX_THREADS)
@@ -111,7 +123,6 @@ heap_op_e min_heap_insert_node(heap_t* heap, void* item, uint32_t order, heap_ty
         heap_node_t node;
         node.item = item;
         node.order = order;
-        node.type = type;
 
         heap->heap[heap->curr_index] = node;
         set_item_index(heap, heap->curr_index);
@@ -280,7 +291,7 @@ static inline void max_heap_percolate_down(heap_t* heap, int index)
 }
 
 
-heap_op_e max_heap_insert_node(heap_t* heap, void* item, uint32_t order, heap_type_e type)
+heap_op_e max_heap_insert_node(heap_t* heap, void* item, uint32_t order)
 {
 
     if (heap->curr_index < MAX_THREADS)
@@ -288,7 +299,6 @@ heap_op_e max_heap_insert_node(heap_t* heap, void* item, uint32_t order, heap_ty
         heap_node_t node;
         node.item = item;
         node.order = order;
-        node.type = type;
 
         heap->heap[heap->curr_index] = node;
         set_item_index(heap, heap->curr_index);
@@ -364,9 +374,8 @@ heap_op_e max_heap_balance_node(heap_t* heap, size_t index, uint32_t order)
 }
 
 
-heap_op_e max_heap_pop_heap(heap_t* heap, void** item, heap_type_e type)
+heap_op_e max_heap_pop_heap(heap_t* heap, void** item)
 {
-    (void)type;
 
     if (heap->curr_index > 0)
     {
