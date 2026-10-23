@@ -71,7 +71,7 @@ static uint32_t iters[NTASKS];
 /* MIRRORS: cached, system-owned globals cloned into host_shared every tick by
  * ktrace_edf_tick, so the debugger reads coherent values without the CPU paying
  * for uncached access on the hot paths. */
-HOST_SHARED metrics_t g_edf_metrics[NTASKS];   /* <- running->metrics (cached thread_t)  */
+HOST_SHARED thread_metrics_t g_edf_metrics[NTASKS];   /* <- running->metrics (cached thread_t)  */
 HOST_SHARED uint32_t  g_ticks_m[NUM_CPUS];
 HOST_SHARED uint32_t  g_misses_m[NUM_CPUS];
 HOST_SHARED uint32_t  g_overhead_m[NUM_CPUS];
@@ -191,9 +191,9 @@ static void edf_flag_corruption(const char* msg, thread_t* t, cpu_core_e core,
 
 
 /* Validate one live task against the values add_periodic_thread_to_core() stamped. Fields
- * period/func/periodicity/core are set once and never change; thread_status must
- * stay a valid enum; sp must live inside the task's own stack. Any deviation ==
- * the struct got clobbered (freed + reused, stray write, etc.). */
+ * period/func/periodicity/core are set once and never change; a live task must not
+ * have been removed from the scheduler; sp must live inside the task's own stack.
+ * Any deviation == the struct got clobbered (freed + reused, stray write, etc.). */
 static void edf_check_task(cpu_core_e core, uint32_t idx)
 {
     thread_t* t = g_edf_handles[core][idx];
@@ -215,9 +215,9 @@ static void edf_check_task(cpu_core_e core, uint32_t idx)
         edf_flag_corruption("edf watchdog: task core corrupted",
                             t, core, idx, (uint32_t)core, (uint32_t)t->core);
 
-    if (t->md.status != PENDING && t->md.status != RUNNING && t->md.status != FINISHED)
-        edf_flag_corruption("edf watchdog: task status corrupted",
-                            t, core, idx, 0u, (uint32_t)t->md.status);
+    if (t->md.status == REMOVED)
+        edf_flag_corruption("edf watchdog: live task was removed from the scheduler",
+                            t, core, idx, (uint32_t)REMOVED, (uint32_t)t->md.status);
 
     if ((char*)t->sp < t->stack || (char*)t->sp > t->stack + THREAD_STACK_SIZE)
         edf_flag_corruption("edf watchdog: task sp outside its stack",
@@ -356,7 +356,7 @@ static void reset_trial(void)
     for (uint32_t i = 0; i < NTASKS; i++)
     {
         g_edf_done[i]    = 0u;
-        g_edf_metrics[i] = (metrics_t){0};
+        g_edf_metrics[i] = (thread_metrics_t){0};
     }
 }
 
@@ -391,7 +391,7 @@ void edf_run(void)
 
     for (uint32_t i = 0; i < NTASKS; i++)
     {
-        g_edf_metrics[i] = (metrics_t){0};
+        g_edf_metrics[i] = (thread_metrics_t){0};
     }
 
 
@@ -429,12 +429,12 @@ void edf_run(void)
         g_edf_armed    = 0u;   /* don't validate a half-built task set */
 
         /* Both cores run the same workload concurrently. The allocator mutex makes
-         * the shared heap safe, and each core's thread_mutex makes the cross-core
+         * the shared heap safe, and each core's core_mutex makes the cross-core
          * push into CPU1's incoming FIFO safe against CPU1's own scheduler. */
         for (uint32_t i = 0; i < NTASKS; i++)
         {
-            g_edf_handles[CPU0][i] = add_periodic_thread_to_core(CPU0, JOBS[i], g_edf_periods[i], PERIODIC, i);
-            g_edf_handles[CPU1][i] = add_periodic_thread_to_core(CPU1, JOBS[i], g_edf_periods[i], PERIODIC, i);
+            g_edf_handles[CPU0][i] = add_periodic_thread_to_core(kMalloc(sizeof(thread_t)), CPU0, JOBS[i], g_edf_periods[i], PERIODIC, i);
+            g_edf_handles[CPU1][i] = add_periodic_thread_to_core(kMalloc(sizeof(thread_t)), CPU1, JOBS[i], g_edf_periods[i], PERIODIC, i);
         }
 
         g_edf_armed = 1u;   /* task set complete -- watchdog live from here */
@@ -504,6 +504,16 @@ void edf_run(void)
             :
             : "memory"
         );
+
+        /* kill_thread already pulled them from the heaps; wait a few ticks for each core
+         * to switch off any killed curr_thread, then free this trial's storage. */
+        uint32_t reap_t0 = g_cpus[CPU0].ticks;
+        while ((g_cpus[CPU0].ticks - reap_t0) < 8u) { __asm__ __volatile__("" ::: "memory"); }
+        for (uint32_t i = 0; i < NTASKS; i++)
+        {
+            if (g_edf_handles[CPU0][i]) kFree(g_edf_handles[CPU0][i]);
+            if (g_edf_handles[CPU1][i]) kFree(g_edf_handles[CPU1][i]);
+        }
     }
 
 
@@ -579,7 +589,7 @@ void edf_balance_run(void)
 
     for (uint32_t i = 0; i < BAL_NTASKS; i++)
     {
-        handles[i] = add_periodic_thread(bal_job, g_bal_periods[i], PERIODIC, i);
+        handles[i] = add_periodic_thread(kMalloc(sizeof(thread_t)), bal_job, g_bal_periods[i], PERIODIC, i);
         g_bal_assign[i] = (uint32_t)handles[i]->core;
     }
 
@@ -601,6 +611,8 @@ void edf_balance_run(void)
     __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     psched_deinit();
+
+    for (uint32_t i = 0; i < BAL_NTASKS; i++) if (handles[i]) kFree(handles[i]);
 
     KTRACE_BALANCE_DONE();
 }

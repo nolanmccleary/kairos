@@ -247,13 +247,13 @@ void persistent_run(void)
 
     for (uint32_t i = 0; i < PP_NPERIODIC; i++)
     {
-        periodic_handles[i]     = add_periodic_thread(pp_periodic_job, g_pp_periods[i], PERIODIC, i);
+        periodic_handles[i]     = add_periodic_thread(kMalloc(sizeof(thread_t)), pp_periodic_job, g_pp_periods[i], PERIODIC, i);
         g_pp_periodic_assign[i] = (uint32_t)periodic_handles[i]->core;
     }
 
     for (uint32_t i = 0; i < PP_NPERSIST; i++)
     {
-        persist_handles[i]     = add_persistent_thread(PP_PERSIST_JOBS[i], g_pp_persist_ids[i],
+        persist_handles[i]     = add_persistent_thread(kMalloc(sizeof(thread_t)), PP_PERSIST_JOBS[i], g_pp_persist_ids[i],
                                                        (persistent_thread_priority_e)g_pp_persist_prio[i]);
         g_pp_persist_assign[i] = (uint32_t)persist_handles[i]->core;
     }
@@ -282,6 +282,9 @@ void persistent_run(void)
     __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     psched_deinit();
+
+    for (uint32_t i = 0; i < PP_NPERIODIC; i++) if (periodic_handles[i]) kFree(periodic_handles[i]);
+    for (uint32_t i = 0; i < PP_NPERSIST;  i++) if (persist_handles[i])  kFree(persist_handles[i]);
 
     KTRACE_PERSIST_DONE();
 }

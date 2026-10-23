@@ -7,6 +7,7 @@
 #include "lock.h"
 #include "min_heap.h"
 #include "thread.h"
+#include "irq.h"
 #include "thread_fifo.h"
 
 /* A critical section that fences the scheduler tick masks IRQ ("cpsid i") when the tick is
@@ -51,6 +52,7 @@ typedef struct
 
     //Sched specific
     heap_t* irqHeap;
+    irq_t**  avail;
 
     heap_t* deadHeap;
     heap_t* relHeap;
@@ -63,7 +65,7 @@ typedef struct
     thread_t* curr_thread;
     thread_t* main_thread;
     
-    mutex_t thread_mutex; //TODO: Rename to core mutex. we can then add thread and irq subsection mutexes later
+    mutex_t core_mutex;
     mutex_t irq_mutex;
 
     bool request_terminate;

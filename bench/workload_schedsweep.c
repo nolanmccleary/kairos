@@ -94,7 +94,7 @@ void schedsweep_run( void )
         __asm__ volatile ( "cpsid " PREEMPT_MASK ::: "memory" );
         for( uint32_t i = 0; i < N; i++ )
         {
-            handles[ i ] = add_periodic_thread_to_core( CPU0, sched_job, 100u + i, PERIODIC, i );
+            handles[ i ] = add_periodic_thread_to_core( kMalloc(sizeof(thread_t)), CPU0, sched_job, 100u + i, PERIODIC, i );
         }
         sweep_level = li;
         __asm__ volatile ( "dmb sy" ::: "memory" );
@@ -123,6 +123,11 @@ void schedsweep_run( void )
         while( ( g_cpus[ CPU0 ].ticks - t0 ) < 8u )
         {
             __asm__ volatile ( "" ::: "memory" );
+        }
+
+        for( uint32_t i = 0; i < N; i++ )
+        {
+            if( handles[ i ] ) kFree( handles[ i ] );
         }
     }
 

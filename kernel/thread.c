@@ -5,7 +5,7 @@
 
 void init_metrics(thread_t* thread)
 {
-    thread->metrics = (metrics_t){0};
+    thread->metrics = (thread_metrics_t){0};
     return;
 }
 

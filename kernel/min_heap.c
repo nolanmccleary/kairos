@@ -28,7 +28,7 @@ static inline int in_range(int curr_index, int index)
 static inline void set_item_index(heap_t* heap, int index)
 {
     if (heap->heap[index].type == TYPE_THREAD)
-        ((thread_t*)heap->heap[index].item)->md.heap_index = index;
+        ((thread_t*)heap->heap[index].item)->md.index = index;
 }
 
 
@@ -207,17 +207,7 @@ heap_op_e min_heap_pop_heap(heap_t* heap, void** item)
 
 
 
-
-
-
-
-
-
-
-
-
 /////////////////////////// MAX HEAP SECTION //////////////////////////////////
-
 
 static inline void max_heap_percolate_up(heap_t* heap, int index)
 {

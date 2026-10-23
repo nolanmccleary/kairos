@@ -1,3 +1,5 @@
+#include "aux.h"
+#include "fault.h"
 #include "irq.h"
 #include "lock.h"
 #include "bsp.h"
@@ -73,48 +75,75 @@ void c_fiq_handler(int id)
 
 
 
-
-sys_exit_e mount_tick_irq(heap_t* heap, thread_t* ctx)
+sys_exit_e  mount_tick_irq(irq_t* ctx, sys_exit_e (*func)(void), uint32_t period, uint32_t id)
 {
     cpu_core_e core = least_loaded_core();
-    ctx->core = core;
-    mount_tick_irq_to_core(heap, ctx);
+    mount_tick_irq_to_core(ctx, core, func, period, id);
     return SYS_OK;
 }
 
 
-sys_exit_e mount_tick_irq_to_core(heap_t* heap, thread_t* ctx)
+sys_exit_e  mount_tick_irq_to_core(irq_t* ctx, cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, uint32_t id)
 {
-    cpu_core_e core = ctx->core;
+    ctx->core = core;
+    ctx->func = func;
+    ctx->timing.period = period;
+    ctx->id = id;
 
-    lock_mutex_persistent(&g_cpus[core].thread_mutex);
+    lock_mutex_persistent(&g_cpus[core].core_mutex);
     
+    if (g_cpus[core].irqHeap->curr_index == MAX_THREADS) //Heap full = no free spots
+    {
+        unlock_mutex(&g_cpus[core].core_mutex);
+        return SYS_ERROR;
+    }
 
+    for (size_t i = 0; i < MAX_IRQS; i++) //Should always find something
+    {
+        if (g_cpus[core].avail[i] == NULL) //Found free spot
+        {
+            if (i == 0) //First position is free 
+            {
+                if (g_cpus[core].irqHeap->curr_index > 0) //There must be other nonfree entries ahead of this one
+                {
+                    size_t j = 1;
+                    while (j < MAX_IRQS)
+                    {
+                        if (g_cpus[core].avail[j] != NULL) break;
+                        j++;
+                    }
+                    
+                    irq_t* next = g_cpus[core].avail[j];
+                    uint32_t rel = next->timing.release_time - (j * WCET_TICKS);
 
+                    while (lt_wrapped(rel, g_cpus[core].ticks)) rel += next->timing.period;
 
+                    ctx->timing.release_time = rel;
+                }
 
-    unlock_mutex(&g_cpus[core].thread_mutex);
+                else //no tick irqs mounted yet 
+                {
+                    ctx->timing.release_time = g_cpus[core].ticks; //Will fire next sched preemption
+                }
+            }
 
+            else //space directly behind was taken 
+            {
+                ctx->timing.release_time = g_cpus[core].avail[i-1]->timing.release_time + WCET_TICKS;
+            }
+
+            g_cpus[core].avail[i] = ctx;
+            ctx->md.avail_index = i;
+
+            break;
+        }
+    }
+    
+    min_heap_insert_node(g_cpus[core].irqHeap, (void*)ctx, ctx->timing.release_time, TYPE_ISR);
+
+    unlock_mutex(&g_cpus[core].core_mutex);
     return SYS_OK;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

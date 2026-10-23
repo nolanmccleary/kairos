@@ -25,9 +25,11 @@ typedef enum
 
 typedef enum
 {
+    INITIALIZED,
     PENDING,
     RUNNING,
     FINISHED,
+    REMOVED,
 }   thread_status_e;
 
 
@@ -50,7 +52,6 @@ typedef enum
 typedef enum
 {
     INCOMING_THREADS,
-    OUTGOING_THREADS,
     DEAD_HEAP,
     REL_HEAP,
     FIFO_LOW,
@@ -65,7 +66,7 @@ typedef struct
     thread_periodicity_e periodicity;
     persistent_thread_priority_e priority;
     thread_owner_e owner;
-    size_t heap_index;
+    size_t index;
 }   thread_metadata_t;
 
 
@@ -91,7 +92,7 @@ typedef struct
     uint32_t t0;
 
     uint32_t prev_u;
-}   metrics_t;
+}   thread_metrics_t;
 
 
 //TODO: Pack this better
@@ -102,7 +103,7 @@ typedef struct __attribute__((aligned(8))) //Stack should start 8-aligned
 
     thread_metadata_t md;
     thread_timing_t timing;
-    metrics_t metrics;
+    thread_metrics_t metrics;
 
     sys_exit_e (*func)();
 

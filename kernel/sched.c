@@ -11,6 +11,7 @@
 #include "tlsf.h"
 #include "system.h"
 #include "thread.h"
+#include "irq.h"
 #include "min_heap.h"
 #include "thread_fifo.h"
 #include "ktrace.h"
@@ -18,10 +19,11 @@
 #include "telemetry.h"
 
 
-// heap_t irqHeaps[NUM_CPUS]; TODO: Re-Enable after migration
 
 static heap_t deadHeaps[NUM_CPUS];
 static heap_t relHeaps[NUM_CPUS];
+static heap_t irqHeaps[NUM_CPUS];
+static irq_t* avails[NUM_CPUS][MAX_IRQS];
 static thread_fifo_t incoming_fifos[NUM_CPUS];
 static thread_fifo_t outgoing_fifos[NUM_CPUS];
 static thread_fifo_t low_fifos[NUM_CPUS];
@@ -65,11 +67,9 @@ static inline void prime_thread(thread_t* thread)
 {
     uint32_t* sp = (uint32_t*)(((uintptr_t)(thread->stack + THREAD_STACK_SIZE)) & ~(uintptr_t)0x7);
 
-    //Return From Exception Full Descending (RFEFD) frame (bottom) as well as all the popping stuff etc
-    *(--sp) = MODE_SYS;                    // spsr_irq
-    *(--sp) = (uint32_t)thread->func;      // lr_irq → pc
+    *(--sp) = MODE_SYS;                    // cpsr
+    *(--sp) = (uint32_t)thread->func;      // pc
 
-    // r0-r12 (full integer file; the IRQ handler saves/restores all of them)
     *(--sp) = 0; // r12
     *(--sp) = 0; // r11
     *(--sp) = 0; // r10
@@ -82,7 +82,7 @@ static inline void prime_thread(thread_t* thread)
     *(--sp) = 0; // r3
     *(--sp) = 0; // r2
     *(--sp) = 0; // r1
-    *(--sp) = 0; //(uint32_t)&thread->md.status; // r0
+    *(--sp) = 0; // r0
 
     *(--sp) = (uint32_t)thread_exit; //lr
 
@@ -100,6 +100,9 @@ static inline bool next_up(cpu_core_e core)
     {
         thread = fifo_pop(g_cpus[core].incoming_threads);
 
+        if (thread->md.status == REMOVED) continue; //Kill thread can't remove from FIFO in arbitrary position so we just abort the thread here.
+                                                    //TODO: Should we raise an error instead?
+
         thread->timing.deadline = g_cpus[core].ticks + thread->timing.period;
         thread->timing.release_time = g_cpus[core].ticks;
         thread->timing.dirty = false;
@@ -107,25 +110,27 @@ static inline bool next_up(cpu_core_e core)
 
         if (thread->md.periodicity == PERSISTENT)
         {
-            if (thread->md.priority == LOW_PRIORITY)
-            {
-                thread->md.owner = FIFO_LOW;
-                fifo_push(g_cpus[core].lowFifo, thread);
-            }
 
-            else if (thread->md.priority == MED_PRIORITY)
+            switch (thread->md.priority)
             {
-                thread->md.owner = FIFO_MED;
-                fifo_push(g_cpus[core].medFifo, thread);
-            }
+                case LOW_PRIORITY:
+                    thread->md.owner = FIFO_LOW;
+                    fifo_push(g_cpus[core].lowFifo, thread);
+                    break;
 
-            else if (thread->md.priority == HIGH_PRIORITY)
-            {
-                thread->md.owner = FIFO_HIGH;
-                fifo_push(g_cpus[core].highFifo, thread);
-            }
+                case MED_PRIORITY:
+                    thread->md.owner = FIFO_MED;
+                    fifo_push(g_cpus[core].medFifo, thread);
+                    break;
 
-            else raise_error("NEXT_UP: Invalid assigned priority for persistent task");
+                case HIGH_PRIORITY:
+                    thread->md.owner = FIFO_HIGH;
+                    fifo_push(g_cpus[core].highFifo, thread);
+                    break;
+
+                default:
+                    raise_error("NEXT_UP: Invalid assigned priority for persistent task");
+            }
 
             continue;   // persistent threads live in the priority FIFOs, not the EDF heaps
         }
@@ -150,13 +155,6 @@ static inline bool next_up(cpu_core_e core)
     while(g_cpus[core].deadHeap->curr_index > 0)
     {
         thread = (thread_t*)g_cpus[core].deadHeap->heap[0].item;
-
-        if (g_cpus[core].curr_thread != g_cpus[core].main_thread)
-        {
-            char* asp  = g_cpus[core].curr_thread->sp;
-            char* base = g_cpus[core].curr_thread->stack;
-            if (asp < base || asp > base + THREAD_STACK_SIZE) raise_error("next_up: active thread sp outside stack range");
-        }
 
         if (thread->md.status == FINISHED)
         {
@@ -184,15 +182,14 @@ static inline bool next_up(cpu_core_e core)
                     min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time, TYPE_THREAD);
                 }
 
-                else min_heap_balance_node(g_cpus[core].deadHeap, thread->md.heap_index, thread->timing.deadline);
+                else min_heap_balance_node(g_cpus[core].deadHeap, thread->md.index, thread->timing.deadline);
                 continue;
             }
 
             else if (thread->md.periodicity == APERIODIC)
             {
                 min_heap_remove_head(g_cpus[core].deadHeap);
-                thread->md.owner = OUTGOING_THREADS;
-                fifo_push(g_cpus[core].outgoing_threads, thread);
+                thread->md.status = REMOVED;
                 continue;
             }
 
@@ -256,7 +253,11 @@ static inline bool next_up(cpu_core_e core)
                 break;
             }
 
-            else fifo_push(g_cpus[core].outgoing_threads, fifo_pop(fifo));
+            else 
+            {
+                thread->md.owner = REMOVED;
+                fifo_pop(fifo);
+            }
         }
     }
 
@@ -292,7 +293,11 @@ static inline bool next_up(cpu_core_e core)
                 break;
             }
 
-            else fifo_push(g_cpus[core].outgoing_threads, fifo_pop(fifo));
+            else 
+            {
+                thread->md.owner = REMOVED;
+                fifo_pop(fifo);
+            }
         }
     }
 
@@ -328,22 +333,14 @@ static inline bool next_up(cpu_core_e core)
                 break;
             }
 
-            else fifo_push(g_cpus[core].outgoing_threads, fifo_pop(fifo));
+            else 
+            {
+                thread->md.owner = REMOVED;
+                fifo_pop(fifo);
+            }
         }
     }
 
-
-    if ((g_cpus[core].outgoing_threads->size > 0) && (lock_mutex_best_effort(&g_allocator_mutex) == LOCK_OK))
-    {
-        while (g_cpus[core].outgoing_threads->size > 0)
-        {
-            thread = fifo_pop(g_cpus[core].outgoing_threads);
-            g_cpus[core].utilization -= thread->metrics.prev_u;
-            kFree(thread);
-        }
-
-        unlock_mutex(&g_allocator_mutex);
-    }
 
     return thread_found;
 }
@@ -352,19 +349,19 @@ static inline bool next_up(cpu_core_e core)
 static void thread_exit()
 {
 #if USE_FIQ
-    __asm__ __volatile__("cpsid if" ::: "memory");   /* the FIQ tick must not preempt this critical section */
+    __asm__ __volatile__("cpsid if" ::: "memory");
 #else
     __asm__ __volatile__("cpsid i" ::: "memory");
 #endif
 
     cpu_core_e core = curr_core();
-    lock_mutex_persistent(&(g_cpus[core].thread_mutex));
+    lock_mutex_persistent(&(g_cpus[core].core_mutex));
 
 
     g_cpus[core].curr_thread->md.status = FINISHED;
     switch_out(g_cpus[core].curr_thread);
 
-    if (!next_up(core)) //Either no valid tasks set or we ran the last one last cycle
+    if (!next_up(core)) //Either no valid tasks set or none are released
     {
         g_cpus[core].curr_thread = g_cpus[core].main_thread;
     }
@@ -381,7 +378,7 @@ static void thread_exit()
         {
             char* new_sp = g_cpus[core].curr_thread->sp;
 
-            unlock_mutex(&(g_cpus[core].thread_mutex));
+            unlock_mutex(&(g_cpus[core].core_mutex));
 
             SWITCH_FRAME_AND_RETURN(new_sp);
             __builtin_unreachable();
@@ -407,7 +404,7 @@ static void thread_exit()
 sys_exit_e psched_core_init(void)
 {
     cpu_core_e core = curr_core();
-    lock_mutex_persistent(&(g_cpus[core].thread_mutex));   // serializes the rebuild vs next_thread; no cpsid needed
+    lock_mutex_persistent(&(g_cpus[core].core_mutex));   // serializes the rebuild vs next_thread; no cpsid needed
 
     char* sp;
     __asm__ __volatile__ ("mov %0, sp" : "=r"(sp));
@@ -424,13 +421,11 @@ sys_exit_e psched_core_init(void)
 
 
     g_cpus[core].incoming_threads = &incoming_fifos[core];
-    g_cpus[core].outgoing_threads = &outgoing_fifos[core];
     g_cpus[core].lowFifo = &low_fifos[core];
     g_cpus[core].medFifo = &med_fifos[core];
     g_cpus[core].highFifo = &high_fifos[core];
 
     initialize_fifo(g_cpus[core].incoming_threads);
-    initialize_fifo(g_cpus[core].outgoing_threads);
     initialize_fifo(g_cpus[core].lowFifo);
     initialize_fifo(g_cpus[core].medFifo);
     initialize_fifo(g_cpus[core].highFifo);
@@ -441,7 +436,7 @@ sys_exit_e psched_core_init(void)
 
     if (g_cpus[core].main_thread == NULL) //can't bring up the core without an idle/boot TCB
     {
-        unlock_mutex(&(g_cpus[core].thread_mutex));
+        unlock_mutex(&(g_cpus[core].core_mutex));
         return SYS_ERROR;
     }
 
@@ -455,13 +450,15 @@ sys_exit_e psched_core_init(void)
     g_cpus[core].request_terminate = false;
 
     g_cpus[core].sched_init = true;
-    unlock_mutex(&(g_cpus[core].thread_mutex));
 
 
-    // lock_mutex_persistent(&g_cpus[core].irq_mutex);
-    // g_cpus[core].irqHeap = &irqHeaps[core];
-    // g_cpus[core].irqHeap->curr_index = 0;
-    // unlock_mutex(&g_cpus[core].irq_mutex);
+    g_cpus[core].irqHeap = &irqHeaps[core];
+    g_cpus[core].irqHeap->curr_index = 0;
+
+    g_cpus[core].avail = avails[core];
+    memzero(g_cpus[core].avail, MAX_IRQS * sizeof(irq_t*));
+
+    unlock_mutex(&g_cpus[core].core_mutex);
 
 
     __asm__ __volatile__("dmb sy" ::: "memory");
@@ -474,9 +471,9 @@ sys_exit_e psched_core_deinit(void)
 {
     cpu_core_e core = curr_core();
 
-    lock_mutex_persistent(&(g_cpus[core].thread_mutex));
+    lock_mutex_persistent(&(g_cpus[core].core_mutex));
     g_cpus[core].request_terminate = true;
-    unlock_mutex(&(g_cpus[core].thread_mutex));
+    unlock_mutex(&(g_cpus[core].core_mutex));
 
     __asm__ __volatile__("dmb sy" ::: "memory");
 
@@ -522,17 +519,20 @@ sys_exit_e psched_deinit(void)
 
     g_spin_exit = prev;
 #endif
+
+    for (cpu_core_e core = CPU0; core < NUM_CPUS; core++)
+    {
+        while (g_cpus[core].sched_init){}
+    }
+
     return SYS_OK;
 }
 
 
-static inline thread_t* enqueue_new_thread(cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
+static inline thread_t* init_thread(thread_t* new_thread, cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
 {
-    if (period == 0u) return NULL; //a zero period collapses deadline onto release_time; disallow it at admission
+    if (period == 0u) return NULL; //zero period not allowed
 
-    lock_mutex_persistent(&g_allocator_mutex);
-    thread_t* new_thread = (thread_t*)kMalloc(sizeof(thread_t));
-    unlock_mutex(&g_allocator_mutex);
 
     if (new_thread == NULL) return NULL;   //heap exhausted
 
@@ -540,6 +540,7 @@ static inline thread_t* enqueue_new_thread(cpu_core_e core, sys_exit_e (*func)(v
     new_thread->md.periodicity = periodicity;
     new_thread->id = id;
     new_thread->md.owner = INCOMING_THREADS;
+    new_thread->md.status = INITIALIZED;
 
     new_thread->func = func;
     new_thread->sp = (char*)(((uintptr_t)(new_thread->stack + THREAD_STACK_SIZE)) & ~(uintptr_t)0x7); //8-byte align sp so processor doesn't abort
@@ -547,9 +548,9 @@ static inline thread_t* enqueue_new_thread(cpu_core_e core, sys_exit_e (*func)(v
     new_thread->core = core;
     init_metrics(new_thread);
 
-    lock_mutex_persistent(&(g_cpus[core].thread_mutex));
+    lock_mutex_persistent(&(g_cpus[core].core_mutex));
     fifo_push(g_cpus[core].incoming_threads, new_thread);
-    unlock_mutex(&(g_cpus[core].thread_mutex));
+    unlock_mutex(&(g_cpus[core].core_mutex));
 
     return new_thread;
 }
@@ -557,24 +558,20 @@ static inline thread_t* enqueue_new_thread(cpu_core_e core, sys_exit_e (*func)(v
 
 
 
-thread_t* add_periodic_thread(sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
+thread_t* add_periodic_thread(thread_t* thread, sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
 {
-    return enqueue_new_thread(least_loaded_core(), func, period, periodicity, id);
+    return init_thread(thread, least_loaded_core(), func, period, periodicity, id);
 }
 
 
-thread_t* add_periodic_thread_to_core(cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
+thread_t* add_periodic_thread_to_core(thread_t* thread, cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, thread_periodicity_e periodicity, uint32_t id)
 {
-    return enqueue_new_thread(core, func, period, periodicity, id);
+    return init_thread(thread, core, func, period, periodicity, id);
 }
 
 
-static inline thread_t* enqueue_new_persistent_thread(cpu_core_e core, sys_exit_e (*func)(void), uint32_t id, persistent_thread_priority_e priority)
+static inline thread_t* init_persistent_thread(thread_t* new_thread, cpu_core_e core, sys_exit_e (*func)(void), uint32_t id, persistent_thread_priority_e priority)
 {
-    lock_mutex_persistent(&g_allocator_mutex);
-    thread_t* new_thread = (thread_t*)kMalloc(sizeof(thread_t));
-    unlock_mutex(&g_allocator_mutex);
-
     if (new_thread == NULL) return NULL;
 
     new_thread->timing.period = PERSISTENT_SLICE_TICKS;                 // unused for persistent; sliced by PERSISTENT_SLICE_TICKS
@@ -583,6 +580,7 @@ static inline thread_t* enqueue_new_persistent_thread(cpu_core_e core, sys_exit_
     new_thread->md.priority = priority;
     new_thread->id = id;
     new_thread->md.owner = INCOMING_THREADS;
+    new_thread->md.status = INITIALIZED;
 
     new_thread->func = func;
     new_thread->sp = (char*)(((uintptr_t)(new_thread->stack + THREAD_STACK_SIZE)) & ~(uintptr_t)0x7); //8-byte align sp so processor doesn't abort
@@ -590,36 +588,66 @@ static inline thread_t* enqueue_new_persistent_thread(cpu_core_e core, sys_exit_
     new_thread->core = core;
     init_metrics(new_thread);
 
-    lock_mutex_persistent(&(g_cpus[core].thread_mutex));
+    lock_mutex_persistent(&(g_cpus[core].core_mutex));
     fifo_push(g_cpus[core].incoming_threads, new_thread);
-    unlock_mutex(&(g_cpus[core].thread_mutex));
+    unlock_mutex(&(g_cpus[core].core_mutex));
 
     return new_thread;
 }
 
 
-thread_t* add_persistent_thread(sys_exit_e (*func)(void), uint32_t id, persistent_thread_priority_e priority)
+thread_t* add_persistent_thread(thread_t* thread, sys_exit_e (*func)(void), uint32_t id, persistent_thread_priority_e priority)
 {
-    return enqueue_new_persistent_thread(least_loaded_core(), func, id, priority);
+    return init_persistent_thread(thread, least_loaded_core(), func, id, priority);
 }
 
 
-thread_t* add_persistent_thread_to_core(cpu_core_e core, sys_exit_e (*func)(void), uint32_t id, persistent_thread_priority_e priority)
+thread_t* add_persistent_thread_to_core(thread_t* thread, cpu_core_e core, sys_exit_e (*func)(void), uint32_t id, persistent_thread_priority_e priority)
 {
-    return enqueue_new_persistent_thread(core, func, id, priority);
+    return init_persistent_thread(thread, core, func, id, priority);
 }
 
 
+//TODO: Confirm this logic works even when called on the current thread
 sys_exit_e kill_thread(thread_t* thread)
 {
-    lock_mutex_persistent(&(g_cpus[thread->core].thread_mutex));
+    lock_mutex_persistent(&(g_cpus[thread->core].core_mutex));
 
-    thread->md.periodicity = APERIODIC;
-    thread->md.status = FINISHED;
-    thread->md.owner = OUTGOING_THREADS;
+    switch (thread->md.owner)
+    {
+        case INCOMING_THREADS: //If in incoming threads queue we let scheduler remove it
+            fifo_remove(g_cpus[thread->core].incoming_threads, thread->md.index);
+            break;
+
+        case FIFO_HIGH:
+            fifo_remove(g_cpus[thread->core].highFifo, thread->md.index);
+            break;
+
+        case FIFO_MED:
+            fifo_remove(g_cpus[thread->core].medFifo, thread->md.index);
+            break;
+
+        case FIFO_LOW:
+            fifo_remove(g_cpus[thread->core].lowFifo, thread->md.index);
+            break;
+
+        case DEAD_HEAP:
+            min_heap_remove_node(g_cpus[thread->core].deadHeap, thread->md.index);
+            break;
+
+        case REL_HEAP:
+            min_heap_remove_node(g_cpus[thread->core].relHeap, thread->md.index);
+            break;
+
+        default: 
+            raise_error("KILL_THREAD: CORRUPTED OWNER!"); //TODO: Should kernel even raise errors like this?
+    }
+
+
+    thread->md.status = REMOVED;
     g_cpus[thread->core].utilization -= thread->metrics.prev_u;
     thread->metrics.prev_u = 0;
-    unlock_mutex(&(g_cpus[thread->core].thread_mutex));
+    unlock_mutex(&(g_cpus[thread->core].core_mutex));
 
     return SYS_OK;
 }
@@ -630,11 +658,11 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
     cpu_core_e core = thread->core;
     cpu_core_e currCore = curr_core();
 
-    lock_mutex_persistent(&(g_cpus[core].thread_mutex));
+    lock_mutex_persistent(&(g_cpus[core].core_mutex));
 
     sys_exit_e ret = SYS_OK;
 
-    if ((thread->md.status == FINISHED && thread->md.periodicity == APERIODIC) || thread->md.owner == OUTGOING_THREADS || thread->md.owner == INCOMING_THREADS) ret = SYS_ERROR; //Can't suspend something that's finished and won't run again
+    if ((thread->md.status == FINISHED && thread->md.periodicity == APERIODIC) || thread->md.status == REMOVED || thread->md.owner == INCOMING_THREADS) ret = SYS_ERROR; //Can't suspend something that's finished and won't run again
 
     if (ret == SYS_OK)
     {
@@ -659,13 +687,13 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
             if (thread->md.owner == DEAD_HEAP)
             {
                 thread->md.owner = REL_HEAP;
-                min_heap_remove_node(g_cpus[core].deadHeap, thread->md.heap_index);
+                min_heap_remove_node(g_cpus[core].deadHeap, thread->md.index);
                 min_heap_insert_node(g_cpus[core].relHeap, thread, thread->timing.release_time, TYPE_THREAD);
             }
 
             else if(thread->md.owner == REL_HEAP)
             {
-                min_heap_balance_node(g_cpus[core].relHeap, thread->md.heap_index, thread->timing.release_time);
+                min_heap_balance_node(g_cpus[core].relHeap, thread->md.index, thread->timing.release_time);
             }
         }
     }
@@ -702,14 +730,14 @@ sys_exit_e suspend_thread(thread_t* thread, uint32_t delay)
         char* new_sp = g_cpus[core].curr_thread->sp;
 
         __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
-        unlock_mutex(&(g_cpus[core].thread_mutex));
+        unlock_mutex(&(g_cpus[core].core_mutex));
 
         SWITCH_FRAME_AND_RETURN(new_sp);
         __builtin_unreachable();
     }
 
 
-    else unlock_mutex(&(g_cpus[core].thread_mutex));
+    else unlock_mutex(&(g_cpus[core].core_mutex));
 
 
     resume:
@@ -726,7 +754,7 @@ inline void next_thread()
     thread_t* sched_prev = g_cpus[core].curr_thread;
 #endif
 
-    if (lock_mutex_best_effort(&(g_cpus[core].thread_mutex)) == LOCK_OK) //TODO: Move this to c_irq_handler
+    if (lock_mutex_best_effort(&(g_cpus[core].core_mutex)) == LOCK_OK) //TODO: Move this to c_irq_handler
     {
         if (g_cpus[core].sched_init && !g_cpus[core].request_terminate)
         {
@@ -736,14 +764,6 @@ inline void next_thread()
             g_cpus[core].ticks++;
 
             SAVE_SYS_SP(g_cpus[core].curr_thread->sp);
-
-
-            if (g_cpus[core].curr_thread != g_cpus[core].main_thread)
-            {
-                char* asp  = g_cpus[core].curr_thread->sp;
-                char* base = g_cpus[core].curr_thread->stack;
-                if (asp < base || asp > base + THREAD_STACK_SIZE) raise_error("next_thread: active thread sp outside stack range");
-            }
 
 
 #ifdef MODE_TEST
@@ -760,7 +780,7 @@ inline void next_thread()
 
                 LOAD_SYS_SP(g_cpus[core].main_thread->sp);
 
-                unlock_mutex(&(g_cpus[core].thread_mutex));
+                unlock_mutex(&(g_cpus[core].core_mutex));
                 return;
             }
 #endif
@@ -772,7 +792,10 @@ inline void next_thread()
             }
 
             switch_in(g_cpus[core].curr_thread);
-            KTRACE_TICK_EXIT(g_cpus[core].curr_thread);   /* test-only per-tick hook (Gantt + metrics mirror) */
+
+#ifdef MODE_TEST
+            KTRACE_TICK_EXIT(g_cpus[core].curr_thread);
+#endif
 
             switch (g_cpus[core].curr_thread->md.status)
             {
@@ -785,6 +808,7 @@ inline void next_thread()
                     break;
 
                 default:
+                    raise_error("SCHEDULER: Non-viable thread state obtained following next_up() call");
                     break;
             }
         }
@@ -793,13 +817,12 @@ inline void next_thread()
         else if (g_cpus[core].request_terminate && (lock_mutex_best_effort(&g_allocator_mutex) == LOCK_OK))
         {
             destroy_threads(g_cpus[core].incoming_threads);
-            destroy_threads(g_cpus[core].outgoing_threads);
 
             for (size_t i = 0; i < g_cpus[core].deadHeap->curr_index; i++)
             {
                 if (g_cpus[core].deadHeap->heap[i].item != NULL)
                 {
-                    kFree(g_cpus[core].deadHeap->heap[i].item);
+                    ((thread_t*)(g_cpus[core].deadHeap->heap[i].item))->md.status = REMOVED;
                 }
             }
             g_cpus[core].deadHeap->curr_index = 0;
@@ -808,7 +831,7 @@ inline void next_thread()
             {
                 if (g_cpus[core].relHeap->heap[i].item != NULL)
                 {
-                    kFree(g_cpus[core].relHeap->heap[i].item);
+                    ((thread_t*)(g_cpus[core].relHeap->heap[i].item))->md.status = REMOVED;
                 }
             }
             g_cpus[core].relHeap->curr_index = 0;
@@ -818,7 +841,7 @@ inline void next_thread()
                 LOAD_SYS_SP(g_cpus[core].main_thread->sp);
             }
             __asm__ __volatile__ ("dmb sy" ::: "memory");
-            kFree(g_cpus[core].main_thread);
+            kFree(g_cpus[core].main_thread); //Only thread for sure malloced is main thread
 
             g_cpus[core].sched_init = false;
             g_cpus[core].request_terminate = false;
@@ -826,12 +849,14 @@ inline void next_thread()
             unlock_mutex(&g_allocator_mutex);
         }
 
-        unlock_mutex(&(g_cpus[core].thread_mutex));
+        overhead = pmu_cycles() - overhead;
+        update_cpu_scheduler_overhead(core, overhead); // want to guard inside lock acquisition because bringing avg down in rare case when we cant acquire lock is not useful
+
+#ifdef MODE_TEST
+        KTRACE_SCHED_COST(overhead, g_cpus[core].curr_thread != sched_prev);
+#endif
+
+        unlock_mutex(&(g_cpus[core].core_mutex));
     }
-
-    overhead = pmu_cycles() - overhead;
-    update_cpu_scheduler_overhead(core, overhead);
-
-    KTRACE_SCHED_COST(overhead, g_cpus[core].curr_thread != sched_prev);
 }
 
