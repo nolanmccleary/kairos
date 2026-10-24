@@ -99,6 +99,8 @@ SECTIONS
         *workload_allocsweep.o(.text*)
         *workload_fragsweep.o(.text*)
         *workload_schedsweep.o(.text*)
+        *workload_tickirq.o(.text*)
+        *workload_gantt.o(.text*)
         *workload_freertos_schedsweep.o(.text*)
 
         . = ALIGN(8);

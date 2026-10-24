@@ -30,6 +30,8 @@ void persistent_run(void);
 void allocsweep_run(void);
 void fragsweep_run(void);
 void schedsweep_run(void);
+void tickirq_run(void);
+void gantt_run(void);
 #if USE_FREERTOS
 void freertos_main(void);
 #endif
@@ -60,6 +62,8 @@ void main(void)
     suspend_run();
     persistent_run();
     schedsweep_run();   /* scheduler overhead vs number of loaded tasks */
+    tickirq_run();      /* periodic tick-IRQs: fire-rate correctness + mount/unmount */
+    gantt_run();        /* mixed EDF + persistent + tick-IRQ run, traced for a Gantt chart */
 #endif
 #endif
 

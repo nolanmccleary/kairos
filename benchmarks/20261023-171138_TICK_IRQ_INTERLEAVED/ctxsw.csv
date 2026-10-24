@@ -1,0 +1,7 @@
+distribution,count,min,mean,median,p99,max,unit
+switch,1024,1102,1255.8,1212.0,1490,1679,cycles
+resume,1024,661,697.7,691.0,883,995,cycles
+
+switch_fraction_p,0.3669
+switch_count,1024
+resume_count,1767

@@ -1,4 +1,6 @@
 #include "ktrace.h"
+#include "cpu.h"
+#include "telemetry.h"
 
 
 #ifdef MODE_TEST
@@ -131,6 +133,57 @@ void ktrace_bp_sched_sweep_done(void)
         :
         : "memory"
     );
+}
+
+
+void ktrace_bp_tickirq_done(void)
+{
+    __asm__ __volatile__(
+        "nop"
+        :
+        :
+        : "memory"
+    );
+}
+
+
+void ktrace_bp_gantt_done(void)
+{
+    __asm__ __volatile__(
+        "nop"
+        :
+        :
+        : "memory"
+    );
+}
+
+
+/* Trace infra lives in workload_edf.c and is reused by the gantt run. */
+extern uint32_t trace_active;
+extern volatile uint32_t g_trace_len[NUM_CPUS];
+
+#define KTRACE_IRQ_EVENTS_MAX 512u
+
+/* One row per tick-IRQ fire. Parallel arrays (no new struct): x-index aligns with the
+ * thread trace (g_trace_len at fire time), plus core and IRQ id. */
+HOST_SHARED volatile uint32_t g_irq_ev_x[KTRACE_IRQ_EVENTS_MAX];
+HOST_SHARED volatile uint32_t g_irq_ev_core[KTRACE_IRQ_EVENTS_MAX];
+HOST_SHARED volatile uint32_t g_irq_ev_id[KTRACE_IRQ_EVENTS_MAX];
+HOST_SHARED volatile uint32_t g_irq_ev_cycles[KTRACE_IRQ_EVENTS_MAX];
+HOST_SHARED volatile uint32_t g_irq_ev_count;
+
+void ktrace_irq_fire(uint32_t core, uint32_t id, uint32_t cycles)
+{
+    if (!trace_active) return;
+
+    uint32_t n = g_irq_ev_count;
+    if (n >= KTRACE_IRQ_EVENTS_MAX) return;
+
+    g_irq_ev_x[n]      = g_trace_len[core];   /* same index the thread hook uses this tick */
+    g_irq_ev_core[n]   = core;
+    g_irq_ev_id[n]     = id;
+    g_irq_ev_cycles[n] = cycles;
+    g_irq_ev_count     = n + 1u;
 }
 
 

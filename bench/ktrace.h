@@ -34,6 +34,13 @@ void ktrace_bp_suspend_done(void);
 void ktrace_bp_persist_ready(void);
 void ktrace_bp_persist_done(void);
 void ktrace_bp_sched_sweep_done(void);
+void ktrace_bp_tickirq_done(void);
+void ktrace_bp_gantt_done(void);
+
+/* Gantt: one event per tick-IRQ fire -- its x-index (= thread-trace index for that tick,
+ * so the IRQ mark lines up with the thread lanes), core, and IRQ id. */
+void ktrace_irq_fire(uint32_t core, uint32_t id, uint32_t cycles);
+extern volatile uint32_t g_irq_ev_count;
 
 
 /* -------------------------------------------------------------------------
@@ -93,6 +100,15 @@ void ktrace_edf_tick(thread_t* running);
 
 #define KTRACE_SCHED_SWEEP_DONE() \
     ktrace_bp_sched_sweep_done()
+
+#define KTRACE_TICKIRQ_DONE() \
+    ktrace_bp_tickirq_done()
+
+#define KTRACE_GANTT_DONE() \
+    ktrace_bp_gantt_done()
+
+#define KTRACE_IRQ_FIRE(core, id, cycles) \
+    ktrace_irq_fire((core), (id), (cycles))
 
 #define KTRACE_SCHED_COST(cost, switched) \
     ktrace_sched_cost((cost), (switched))

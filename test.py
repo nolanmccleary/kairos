@@ -28,6 +28,13 @@ MEMLAT_SAMPLES = 8192     # matches workload_micro.c (bumped to catch SDRAM's sp
 ALLOC_METRICS = 7
 TRACE_TICKS   = 7200      # g_sched_trace capacity (must match workload_edf.c)
 GANTT_WINDOW  = 720       # ticks shown in the Gantt (>1 hyperperiod)
+
+# Mixed-schedule Gantt layout -- must match workload_gantt.c.
+GANTT_PERIODIC     = {0: 6, 1: 10, 2: 15}   # EDF thread id -> period
+GANTT_PERSIST      = (3,)                   # persistent thread id(s)
+GANTT_IRQ          = {0: 5, 1: 13}          # tick-IRQ id -> period
+GANTT_WINDOW_TICKS = 60                     # ticks shown in the mixed Gantt (short for legibility)
+GANTT_SECONDS      = 0.3                    # measurement window before the host releases
 COMFORTABLE_U = 700       # always plot this under-capacity trial as a baseline
 SUSP_TICKS    = 64        # suspend-test per-scenario run-tick capture depth (must match workload_suspend.c)
 SUSP_SLACK    = 3         # ticks of scheduling slack allowed on a measured suspension delay
@@ -782,6 +789,83 @@ def plot_gantt(trace: Sequence[int], periods: Sequence[int], path: Path, u_permi
     ax.set_xlabel("time (ticks)")
     ax.set_title(f"EDF schedule  (Ureq={u_permille / 1000:.3f}, Ucfg={u_configured:.3f}, "
                  f"Umeas={measured_total:.3f}{', ' + label if label else ''}; first {n} ticks; up-arrow = release)")
+    ax.grid(axis="x", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
+
+
+def write_gantt_csv(path: Path, data: "tuple[list[list[int]], list[tuple[int, int, int, int]]]") -> None:
+    # Bijective with the figure: per-tick owning thread id (255 = idle) = the run bars,
+    # and one row per tick-IRQ fire (tick, id, run cycles) = the marks + their labels.
+    threads, irq_events = data
+    trace = threads[0] if threads else []
+    with open(path, "w") as f:
+        f.write("kind,tick,id,cycles\n")
+        for tick, tid in enumerate(trace):
+            f.write(f"thread,{tick},{tid},\n")
+        for c, x, iid, cyc in irq_events:
+            if c == 0:
+                f.write(f"irq,{x},{iid},{cyc}\n")
+
+
+def plot_mixed_gantt(data: "tuple[list[list[int]], list[tuple[int, int, int, int]]]", path: Path,
+                     window: int = GANTT_WINDOW) -> None:
+    threads, irq_events = data
+    trace = threads[0] if threads else []            # the mixed run is CPU0-only
+    n = min(len(trace), window)
+    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+
+    # lanes top-to-bottom: EDF periodics, persistent threads, tick-IRQs
+    periodic_ids = sorted(GANTT_PERIODIC)
+    lanes = ([("edf", i) for i in periodic_ids]
+             + [("persist", i) for i in GANTT_PERSIST]
+             + [("irq", i) for i in sorted(GANTT_IRQ)])
+    nr = len(lanes)
+
+    width = min(26.0, max(12.0, n / 18.0))
+    fig, ax = plt.subplots(figsize=(width, 0.5 * nr + 1.5))
+
+    def runs(tid: int) -> list[tuple[int, int]]:
+        segs, t = [], 0
+        while t < n:
+            if trace[t] == tid:
+                s = t
+                while t < n and trace[t] == tid:
+                    t += 1
+                segs.append((s, t - s))
+            else:
+                t += 1
+        return segs
+
+    labels = []
+    for row, (kind, idv) in enumerate(lanes):
+        y = nr - 1 - row                              # first lane at top
+        if kind == "edf":
+            ax.broken_barh(runs(idv), (y + 0.15, 0.7), facecolors=colors[row % len(colors)])
+            for k in range(0, n, GANTT_PERIODIC[idv]):
+                ax.annotate("", xy=(k, y + 1.0), xytext=(k, y + 0.12),
+                            arrowprops=dict(arrowstyle="->", color="black", lw=0.7))
+            labels.append(f"$\\tau_{idv}$ (T={GANTT_PERIODIC[idv]})")
+        elif kind == "persist":
+            ax.broken_barh(runs(idv), (y + 0.15, 0.7), facecolors=colors[row % len(colors)])
+            labels.append(f"persist id={idv}")
+        else:  # irq: a mark at each fire tick (sub-tick, so not drawn to width), labeled with run cycles
+            pts = [(x, cyc) for (c, x, i, cyc) in irq_events if c == 0 and i == idv and x < n]
+            ax.plot([x + 0.5 for x, _ in pts], [y + 0.5] * len(pts),
+                    marker="v", linestyle="none", color="black", markersize=6)
+            for x, cyc in pts:
+                ax.annotate(str(cyc), (x + 0.5, y + 0.92), ha="center", va="bottom",
+                            fontsize=6, rotation=90)
+            labels.append(f"IRQ{idv} (T={GANTT_IRQ[idv]})")
+
+    ax.set_yticks([(nr - 1 - row) + 0.5 for row in range(nr)])
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_ylim(0, nr)
+    ax.set_xlim(0, max(n, 1))
+    ax.set_xlabel("time (ticks)")
+    ax.set_title(f"Mixed schedule: EDF periodics + persistent threads + tick-IRQs "
+                 f"(CPU0; first {n} ticks; up-arrow = release, ▼ = IRQ fire labeled with run cycles)")
     ax.grid(axis="x", alpha=0.3)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
@@ -1614,6 +1698,94 @@ def write_artifacts(outdir: Path, alloc_metrics: list[Metric], edf_results: list
 
 
 # --- main -------------------------------------------------------------------
+def tickirq_test(ocd: OCD, symbols: dict[str, int]) -> list[tuple[int, int, int, bool]]:
+    bp_done  = symbols["ktrace_bp_tickirq_done"]
+    bp_fault = symbols["fault_trap"]
+
+    # Firmware is parked on the previous phase's bp; free it (A9 6-cap) and arm ours.
+    if symbols.get("ktrace_bp_sched_sweep_done"):
+        ocd.remove_hw_breakpoint(symbols["ktrace_bp_sched_sweep_done"])
+    ocd.add_hw_breakpoint(bp_done)
+
+    # Runs ~500 ticks (~0.5 s) autonomously, then parks on bp_done.
+    ocd.continue_from_breakpoint()
+    deadline = time.time() + 30.0
+    while True:
+        time.sleep(0.5)
+        ocd.halt()
+        pc = ocd.pc()
+        if pc == bp_done:
+            break
+        if pc == bp_fault:
+            raise RuntimeError(ocd.diagnose())
+        if time.time() > deadline:
+            raise RuntimeError(f"tickirq stalled, pc=0x{pc:08x}:\n{ocd.diagnose()}")
+        ocd.resume()
+
+    n         = min(ocd.read_u32(symbols["g_tickirq_n"]), 16)
+    periods   = ocd.read_words(symbols["g_tickirq_periods"], n)
+    counts    = ocd.read_words(symbols["g_tickirq_count"], n)
+    run_ticks = ocd.read_u32(symbols["g_tickirq_run_ticks"])
+
+    print(f"\ntick-IRQ fire rates over {run_ticks} ticks (CPU0):")
+    rows: list[tuple[int, int, int, bool]] = []
+    all_ok = True
+    for i in range(n):
+        expected = run_ticks // periods[i] if periods[i] else 0
+        ok = abs(int(counts[i]) - expected) <= 2   # +-2 for start-phase + window-edge
+        all_ok = all_ok and ok
+        rows.append((periods[i], counts[i], expected, ok))
+        print(f"  period={periods[i]:<4} fired={counts[i]:<5} expected~{expected:<5} "
+              f"{'OK' if ok else 'FAIL'}")
+    if not all_ok:
+        raise RuntimeError("tick-IRQ fire-rate check failed")
+    print("  tick-IRQ: all rates within tolerance")
+    return rows
+
+
+TRACE_TICKS = 7200   # must match workload_edf.c (g_sched_trace second dimension)
+
+
+def gantt_test(ocd: OCD, symbols: dict[str, int], num_cpus: int
+               ) -> tuple[list[list[int]], list[tuple[int, int, int, int]]]:
+    bp_done  = symbols["ktrace_bp_gantt_done"]
+    bp_fault = symbols["fault_trap"]
+
+    if symbols.get("ktrace_bp_tickirq_done"):
+        ocd.remove_hw_breakpoint(symbols["ktrace_bp_tickirq_done"])
+    ocd.add_hw_breakpoint(bp_done)
+
+    # Run the mixed workload (main parks in KTRACE_WAIT_RELEASE), sample the trace after a
+    # short window, then release so the firmware tears down and stops at bp_done.
+    ocd.continue_from_breakpoint()
+    time.sleep(GANTT_SECONDS)
+    ocd.halt()
+    if ocd.read_fault():
+        raise RuntimeError(ocd.diagnose())
+
+    w = GANTT_WINDOW_TICKS
+    threads: list[list[int]] = []
+    for core in range(num_cpus):
+        n = min(ocd.read_u32(symbols["g_trace_len"] + core * 4), w)
+        threads.append(list(ocd.read_bytes(symbols["g_sched_trace"] + core * TRACE_TICKS, n)) if n else [])
+
+    irq_events: list[tuple[int, int, int, int]] = []
+    cnt = min(ocd.read_u32(symbols["g_irq_ev_count"]), 512)
+    if cnt:
+        xs  = ocd.read_words(symbols["g_irq_ev_x"], cnt)
+        cos = ocd.read_words(symbols["g_irq_ev_core"], cnt)
+        ids = ocd.read_words(symbols["g_irq_ev_id"], cnt)
+        cyc = ocd.read_words(symbols["g_irq_ev_cycles"], cnt)
+        irq_events = [(cos[i], xs[i], ids[i], cyc[i]) for i in range(cnt) if xs[i] < w]
+
+    ocd.write_u32(symbols["g_test_release"], 1)
+    ocd.resume()
+    ocd.expect_breakpoint(bp_done, timeout=20.0)
+
+    print(f"\ngantt: {sum(len(t) for t in threads)} thread-ticks, {len(irq_events)} IRQ fires captured")
+    return threads, irq_events
+
+
 def main(bootable: bool = False) -> None:
     if not TEST_ELF.exists():
         raise RuntimeError(f"{TEST_ELF} does not exist")
@@ -1629,6 +1801,7 @@ def main(bootable: bool = False) -> None:
     suspend: SuspendResult | None = None
     persist: PersistResult | None = None
     sched_rows = None
+    gantt_data = None
 
     outdir = RESULTS_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1661,7 +1834,8 @@ def main(bootable: bool = False) -> None:
         has = lambda name: name in symbols
         print("tests detected: " + ", ".join(t[:-4] for t in (
             "allocbench_run", "edf_run", "edf_balance_run", "micro_run",
-            "suspend_run", "persistent_run", "schedsweep_run") if has(t)) + "\n")
+            "suspend_run", "persistent_run", "schedsweep_run", "tickirq_run",
+            "gantt_run") if has(t)) + "\n")
 
         periods, u_values = (), ()
         if has("edf_run"):
@@ -1701,6 +1875,10 @@ def main(bootable: bool = False) -> None:
                 persist = persistent_test(ocd, symbols, num_cpus)
             if has("schedsweep_run"):
                 sched_rows = schedsweep_test(ocd, symbols)
+            if has("tickirq_run"):
+                tickirq_test(ocd, symbols)
+            if has("gantt_run"):
+                gantt_data = gantt_test(ocd, symbols, num_cpus)
         except KeyboardInterrupt:
             # Ctrl-C usually means the run hung -- dump where both cores are stuck
             # (+ any fault record) before the socket closes. fault_addr/num_cpus are
@@ -1763,6 +1941,9 @@ def main(bootable: bool = False) -> None:
                            check=True)
         except Exception as e:
             print(f"(schedsweep plot skipped: {e})")
+    if gantt_data:
+        write_gantt_csv(outdir / "tick_irq_interleaved.csv", gantt_data)
+        plot_mixed_gantt(gantt_data, outdir / "tick_irq_interleaved.png")
     print(f"\nPASS   artifacts in {outdir}")
 
 

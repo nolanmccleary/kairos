@@ -64,8 +64,7 @@ sys_exit_e  mount_tick_irq(irq_t* irq, sys_exit_e (*func)(void), uint32_t period
 sys_exit_e  mount_tick_irq_to_core(irq_t* irq, cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, uint32_t id);
 sys_exit_e  unmount_tick_irq(irq_t* irq); //User still needs to de-allocate
 
-void irq_switch_in(irq_t* irq);
-void irq_switch_out(irq_t* irq);
+
 
 #endif
 

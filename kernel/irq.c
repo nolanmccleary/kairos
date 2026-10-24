@@ -11,6 +11,39 @@
 #include "min_heap.h"
 
 
+
+
+
+static inline void irq_switch_in(irq_t* irq)
+{
+    irq->timing.t0 = pmu_cycles(); 
+}
+
+
+
+static inline void irq_switch_out(irq_t* irq)
+{
+    irq->timing.t1 = pmu_cycles();
+    KTRACE_IRQ_FIRE(irq->core, irq->id, irq->timing.t1 - irq->timing.t0);
+}
+
+
+
+static inline void run_irqs(cpu_core_e core)
+{
+    while (g_cpus[core].irqHeap->curr_index > 0 && geq_wrapped(g_cpus[core].ticks, ((irq_t*)(g_cpus[core].irqHeap->heap[0].item))->timing.release_time))
+    {
+        irq_switch_in(((irq_t*)(g_cpus[core].irqHeap->heap[0].item)));
+        ((irq_t*)(g_cpus[core].irqHeap->heap[0].item))->func();
+        irq_switch_out(((irq_t*)(g_cpus[core].irqHeap->heap[0].item)));
+
+        ((irq_t*)(g_cpus[core].irqHeap->heap[0].item))->timing.release_time += ((irq_t*)(g_cpus[core].irqHeap->heap[0].item))->timing.period;
+        min_heap_balance_node(g_cpus[core].irqHeap, 0, ((irq_t*)(g_cpus[core].irqHeap->heap[0].item))->timing.release_time);
+    }
+}
+
+
+
 void c_irq_handler(int id)
 {
     /* GICC_IAR carries the source CPUID in bits [12:10] for SGIs; strip it so a
@@ -42,10 +75,12 @@ void c_irq_handler(int id)
 
         case GICD_IRQ:
             // WDT_L4 = 0x76; //Feed WDT
+
+            GTIMER_ISR = 1; //Timer ISR ACK, when this set
             cpu_core_e core = curr_core();
             if (lock_mutex_best_effort(&(g_cpus[core].core_mutex)) == LOCK_OK)
             {
-                GTIMER_ISR = 1; //Timer ISR ACK, when this
+                run_irqs(core);
                 next_thread(core);
                 unlock_mutex(&(g_cpus[core].core_mutex));
             }
@@ -91,6 +126,8 @@ sys_exit_e  mount_tick_irq(irq_t* irq, sys_exit_e (*func)(void), uint32_t period
 
 sys_exit_e  mount_tick_irq_to_core(irq_t* irq, cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, uint32_t id)
 {
+    if (period == 0) return SYS_ERROR;
+
     irq->core = core;
     irq->func = func;
     irq->timing.period = period;
@@ -170,14 +207,4 @@ sys_exit_e unmount_tick_irq(irq_t* irq)
 
 
 
-void irq_switch_in(irq_t* irq)
-{
-    irq->timing.t0 = pmu_cycles(); 
-}
 
-
-
-void irq_switch_out(irq_t* irq)
-{
-    irq->timing.t1 = pmu_cycles(); 
-}

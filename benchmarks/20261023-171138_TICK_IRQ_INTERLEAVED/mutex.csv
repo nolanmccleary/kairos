@@ -1,0 +1,3 @@
+distribution,count,min,mean,median,p99,max,unit
+uncontended,1024,82,82.1,82.0,82,174,cycles
+contended,1024,48,85.7,48.0,1017,1051,cycles

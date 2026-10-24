@@ -92,7 +92,6 @@ static inline void prime_thread(thread_t* thread)
 static inline bool check_fifos(cpu_core_e core, thread_t* thread, thread_fifo_t* fifo)
 {
     bool thread_found = false;
-    fifo = g_cpus[core].highFifo;
 
     while (fifo->size > 0)
     {

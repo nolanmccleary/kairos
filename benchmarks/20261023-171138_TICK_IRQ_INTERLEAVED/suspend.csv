@@ -1,0 +1,11 @@
+distribution,count,min,mean,median,p99,max,unit
+self_run_ticks,10,1,32.8,36.0,63,63,cycles
+victim_run_ticks,16,64,105.1,108.0,138,138,cycles
+self_requested,8
+self_measured,8
+self_resumed,1
+self_regs_ok,1
+other_requested,12
+other_suspend_tick,74
+other_first_post,86
+other_gap,12
