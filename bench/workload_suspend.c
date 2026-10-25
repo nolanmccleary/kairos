@@ -33,7 +33,7 @@
  *     is not currently running (the non-asm branch). We verify the victim
  *     disappears from the schedule for ~delay ticks, then runs again.
  *
- * All host-readable state lives in .telemetry (HOST_SHARED); the whole file is
+ * All host-readable state lives in .telemetry (SDRAM_UNCACHED_TELEMETRY); the whole file is
  * MODE_TEST-only.
  * ------------------------------------------------------------------------- */
 
@@ -60,31 +60,31 @@
  * const-initialized) so they live in the KEEP'd .telemetry region and survive
  * --gc-sections even though the firmware itself uses the SELF_DELAY/OTHER_DELAY
  * macros directly. */
-HOST_SHARED volatile uint32_t g_susp_self_requested_delay;
-HOST_SHARED volatile uint32_t g_susp_other_requested_delay;
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_self_requested_delay;
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_other_requested_delay;
 
 
 /* --- scenario A (self-suspend) host-readable state ------------------------- */
-HOST_SHARED volatile uint32_t g_susp_self_ticks[SUSP_TICKS];  /* tick of each activation */
-HOST_SHARED volatile uint32_t g_susp_self_n;                  /* activation count (also capture index) */
-HOST_SHARED volatile uint32_t g_susp_self_delay;              /* measured ticks the task was gone */
-HOST_SHARED volatile uint32_t g_susp_self_resumed;            /* 1 once it returns from suspend_thread */
-HOST_SHARED volatile uint32_t g_susp_self_regs_ok;            /* 1 if callee-saved sentinels survived resume */
-HOST_SHARED volatile uint32_t g_susp_self_done;               /* scenario-complete flag the driver spins on */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_self_ticks[SUSP_TICKS];  /* tick of each activation */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_self_n;                  /* activation count (also capture index) */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_self_delay;              /* measured ticks the task was gone */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_self_resumed;            /* 1 once it returns from suspend_thread */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_self_regs_ok;            /* 1 if callee-saved sentinels survived resume */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_self_done;               /* scenario-complete flag the driver spins on */
 
 
 /* --- scenario B (suspend-another) host-readable state ---------------------- */
-HOST_SHARED volatile uint32_t g_susp_other_ticks[SUSP_TICKS]; /* tick of each victim activation */
-HOST_SHARED volatile uint32_t g_susp_other_n;                 /* victim activation count */
-HOST_SHARED volatile uint32_t g_susp_other_suspend_tick;      /* tick the controller issued the suspend */
-HOST_SHARED volatile uint32_t g_susp_other_last_pre;          /* last victim run tick before the suspend */
-HOST_SHARED volatile uint32_t g_susp_other_first_post;        /* first victim run tick after the suspend */
-HOST_SHARED volatile uint32_t g_susp_other_armed;             /* 1 once the suspend has been issued */
-HOST_SHARED volatile uint32_t g_susp_other_done;              /* scenario-complete flag */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_other_ticks[SUSP_TICKS]; /* tick of each victim activation */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_other_n;                 /* victim activation count */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_other_suspend_tick;      /* tick the controller issued the suspend */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_other_last_pre;          /* last victim run tick before the suspend */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_other_first_post;        /* first victim run tick after the suspend */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_other_armed;             /* 1 once the suspend has been issued */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_other_done;              /* scenario-complete flag */
 
 
 /* Progress marker (host polls to localize a stall): 1=self 2=other 3=done. */
-HOST_SHARED volatile uint32_t g_susp_phase;
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_susp_phase;
 
 
 static thread_t*         g_susp_victim;   /* victim handle, read by the controller job */

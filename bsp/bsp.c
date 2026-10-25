@@ -185,10 +185,10 @@ static void build_tables(void)
 
     /* The bulk telemetry block lives in SDRAM but must be Device (JTAG-coherent),
        not cacheable like the rest of DDR. Its linker section is one 1MB block. */
-    extern char _host_shared_sdram_start[];
-    extern char _host_shared_sdram_end[];
-    uint32_t sdram_hs_start = (uint32_t)(uintptr_t)_host_shared_sdram_start;
-    uint32_t sdram_hs_end   = (uint32_t)(uintptr_t)_host_shared_sdram_end;
+    extern char _sdram_uncached_start[];
+    extern char _sdram_uncached_end[];
+    uint32_t sdram_hs_start = (uint32_t)(uintptr_t)_sdram_uncached_start;
+    uint32_t sdram_hs_end   = (uint32_t)(uintptr_t)_sdram_uncached_end;
 
     uint32_t delegated_block = (uint32_t)(uintptr_t)_ocram_origin >> L1_BLOCK_ADDR_SHIFT;
 
@@ -218,11 +218,11 @@ static void build_tables(void)
        stays Device so JTAG reads/writes it coherently. Everything below OCRAM in the
        block (boot ROM, GIC, timer) is Device. This L2 table is the SOLE source of
        memory type for the block. */
-    extern char _host_shared_ocram_start[];
-    extern char _host_shared_ocram_end[];
+    extern char _ocram_uncached_start[];
+    extern char _ocram_uncached_end[];
     uint32_t ocram_start = (uint32_t)(uintptr_t)_ocram_origin;
-    uint32_t hs_start    = (uint32_t)(uintptr_t)_host_shared_ocram_start;
-    uint32_t hs_end      = (uint32_t)(uintptr_t)_host_shared_ocram_end;
+    uint32_t hs_start    = (uint32_t)(uintptr_t)_ocram_uncached_start;
+    uint32_t hs_end      = (uint32_t)(uintptr_t)_ocram_uncached_end;
 
     volatile uint32_t *l2_table = _l2_table_base;
 

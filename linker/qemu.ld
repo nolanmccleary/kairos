@@ -107,8 +107,7 @@ SECTIONS
         _heap_end = .;
     } > RAM
 
-    /* Stacks: reserve both cores' banks, then compute tops downward (CPU0 highest),
-       matching the DE1 layout order UND/ABT/FIQ/IRQ/SVC/SYS. */
+
     . = ALIGN(8);
     _bank_size = _und_stack_size + _abt_stack_size + _stack_size + _stack_size + _stack_size + _stack_size;
     . = . + 2 * _bank_size;

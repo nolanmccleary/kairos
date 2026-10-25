@@ -38,10 +38,7 @@ void freertos_main(void);
 
 void main(void)
 {
-
 #if defined(MODE_TEST)
-    // __asm__ __volatile__("cpsid if" ::: "memory");
-
 #if USE_FREERTOS
     /* FreeRTOS battery: start the scheduler and run every bench as a FreeRTOS task
      * (never returns). */

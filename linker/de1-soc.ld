@@ -15,33 +15,25 @@ MEMORY
 
 _ocram_origin = ORIGIN(OCRAM);
 
+_stack_size     = 0x300;
+_sys_stack_size = 0x2000;
+_abt_stack_size = 0x300;
+_und_stack_size = 0x300;
 
-/* -------------------------------------------------------------------------
- * Configuration
- * ------------------------------------------------------------------------- */
-
-_stack_size     = 0x300;   /* temporary: freed OCRAM to fit the micro workload; revert once kernel/app text split moves app code to SDRAM */
-_abt_stack_size = 0x200;
-_und_stack_size = 0x200;
-
-_bank_size = 0x80;
 
 _post_heap_offset = 0x00100000;   /* 1 MB: free SDRAM below the heap, above the mmu tables */
 
 _heap_offset = 0x200000;
 _heap_size   = 0x01000000;
 
-/* host_shared telemetry sits in its own 1MB SDRAM block directly above the heap
- * (0x1200000). build_tables() maps that block Device so JTAG phys reads are
- * coherent with CPU writes. */
-_host_shared_offset = _heap_offset + _heap_size;
+
+_sdram_uncached_offset = _heap_offset + _heap_size;
 
 
 _preloader_header_offset = 0x40;
 _preloader_header_size   = 0x0C;
 
 
-_l3_boot_region_end = 0x00100000;   /* 1048576 bytes */
 
 
 SECTIONS
@@ -65,13 +57,9 @@ SECTIONS
 
 
 
-    /* ---------------------------------------------------------------------
-     * SDRAM application/test code, copied in from the SD card by load_from_sd()
-     * after SDRAM is up (see bsp/sd.c). NOLOAD: it is NOT in preloader.bin -- the
-     * boot ROM only loads the OCRAM kernel; this region arrives from app.bin on SD.
-     * Empty until bench/*.o is relocated here (and flash_sd.sh writes app.bin).
-     * --------------------------------------------------------------------- */
-
+    /*  All appcode lives in SDRAM
+     *  Some of the kernel also lives in SDRAM
+     * */
     .kern_sdram ORIGIN(SDRAM) + _post_heap_offset :
     {
         . = ALIGN(8);
@@ -80,8 +68,38 @@ SECTIONS
         *sched.o(.text*)
         *min_heap.o(.text*)
         *telemetry.o(.text*)
+        *gic.o(.text*)
+        *timers.o(.text*)
+        *tlsf.o(.text*)
+        *lock.o(.text*)
+        *thread.o(.text*)
+        *thread_fifo.o(.text*)
+        *irq.o(.text*)
 
         . = ALIGN(8);
+    } > SDRAM
+
+
+    /* .bss of the SDRAM-resident kernel objects. NOT NOLOAD: it sits inside the
+     * [_appcode_start, _appcode_end) blob as zero fill, so load_from_sd copies the
+     * zeros in -- the reset-time bss_zero runs before SDRAM is up and cannot reach
+     * here, and g_cpus/g_allocator_mutex are locked (relying on zero) in psched_init. */
+    .kern_sdram_bss : ALIGN(8)
+    {
+        _kern_sdram_bss_start = .;
+        *sched.o(.bss* COMMON)
+        *min_heap.o(.bss* COMMON)
+        *thread.o(.bss* COMMON)
+        *thread_fifo.o(.bss* COMMON)
+        *gic.o(.bss* COMMON)
+        *timers.o(.bss* COMMON)
+        *tlsf.o(.bss* COMMON)
+        *lock.o(.bss* COMMON)
+        *irq.o(.bss* COMMON)
+        *telemetry.o(.bss* COMMON)
+        *workload_*.o(.bss* COMMON)
+        . = ALIGN(8);
+        _kern_sdram_bss_end = .;
     } > SDRAM
 
 
@@ -129,15 +147,15 @@ SECTIONS
 
     /* Bulk host-readable telemetry -- its own 1MB Device-mapped SDRAM block,
      * directly above the heap. NOLOAD: firmware writes it at runtime. */
-    .host_shared ORIGIN(SDRAM) + _host_shared_offset (NOLOAD) :
+    .sdram_uncached ORIGIN(SDRAM) + _sdram_uncached_offset (NOLOAD) :
     {
-        _host_shared_sdram_start = .;
+        _sdram_uncached_start = .;
 
-        KEEP(*(.telemetry))
+        KEEP(*(.sdram_uncached_telemetry))
 
         . = ALIGN(8);
 
-        _host_shared_sdram_end = .;
+        _sdram_uncached_end = .;
     } > SDRAM
 
 
@@ -160,18 +178,12 @@ SECTIONS
         *sequencer.o(.text*)
         *sd.o(.text*)
         *fault.o(.text*)
-        *gic.o(.text*)
-        *irq.o(.text*)
-        *cpu.o(.text*)
-        *timers.o(.text*)
-        *lock.o(.text*)
-        *tlsf.o(.text*)
         *pmu.o(.text*)
-        *thread.o(.text*)
-        *thread_fifo.o(.text*)
+        *memset.o(.text*)
+        *cpu.o(.text*)
         *ktrace.o(.text*)
 
-        *(.text*)      /* libgcc + anything not pulled to SDRAM above stays OCRAM */
+        *(.text*)
         *(.rodata*)
 
         . = ALIGN(0x1000);
@@ -182,20 +194,22 @@ SECTIONS
 
 
 
-    /* OCRAM host island: only what must be reachable when SDRAM is not --
-     * crash records (.fault), the pre-c_startup boot gate, and the SMP mailbox
-     * (.host_ocram). Device-mapped by the L2 loop in build_tables(). */
-    .host_ocram ALIGN(0x1000) (NOLOAD) :
-    {
-        _host_shared_ocram_start = .;
 
-        KEEP(*(.host_ocram))
+    .ocram_uncached ALIGN(0x1000) (NOLOAD) :
+    {
+        _ocram_uncached_start = .;
+
+        KEEP(*(.ocram_uncached_mailbox))
         . = ALIGN(8);
         KEEP(*(.fault))
+        . = ALIGN(8);
+        KEEP(*(.ocram_uncached_telemetry))
 
         . = ALIGN(0x1000);
-        _host_shared_ocram_end = .;
+        _ocram_uncached_end = .;
     } > OCRAM
+
+
 
 
 
@@ -261,7 +275,7 @@ SECTIONS
     _cpu0_sys_stack_top = _cpu0_svc_stack_top - _stack_size;
 
     /* CPU1 bank: directly below CPU0's, identical sizes. */
-    _cpu1_und_stack_top = _cpu0_sys_stack_top - _stack_size;
+    _cpu1_und_stack_top = _cpu0_sys_stack_top - _sys_stack_size;
     _cpu1_abt_stack_top = _cpu1_und_stack_top - _und_stack_size;
     _cpu1_fiq_stack_top = _cpu1_abt_stack_top - _abt_stack_size;
     _cpu1_irq_stack_top = _cpu1_fiq_stack_top - _stack_size;
@@ -301,20 +315,20 @@ SECTIONS
     ASSERT(_preloader_header == ORIGIN(OCRAM) + 0x40,
         "mkpimage header hole is not at image offset 0x40")
 
-    ASSERT((_host_shared_ocram_start & (0x1000 - 1)) == 0,
+    ASSERT((_ocram_uncached_start & (0x1000 - 1)) == 0,
         "host_ocram island does not start on a 4096-byte page boundary")
-    ASSERT((_host_shared_ocram_end & (0x1000 - 1)) == 0,
+    ASSERT((_ocram_uncached_end & (0x1000 - 1)) == 0,
         "host_ocram island does not end on a 4096-byte page boundary")
 
     /* SDRAM host_shared occupies one 1MB block that build_tables() maps Device;
        it must be 1MB-aligned, clear of the heap, one block wide, and inside DDR. */
-    ASSERT((_host_shared_sdram_start & (0x100000 - 1)) == 0,
+    ASSERT((_sdram_uncached_start & (0x100000 - 1)) == 0,
         "SDRAM host_shared does not start on a 1MB block boundary")
-    ASSERT(_host_shared_sdram_start >= _heap_end,
+    ASSERT(_sdram_uncached_start >= _heap_end,
         "SDRAM host_shared overlaps the heap")
-    ASSERT((_host_shared_sdram_end - _host_shared_sdram_start) <= 0x100000,
+    ASSERT((_sdram_uncached_end - _sdram_uncached_start) <= 0x100000,
         "SDRAM host_shared exceeds its 1MB Device block")
-    ASSERT(_host_shared_sdram_end <= ORIGIN(SDRAM) + _sdram_length,
+    ASSERT(_sdram_uncached_end <= ORIGIN(SDRAM) + _sdram_length,
         "SDRAM host_shared extends past the end of DDR")
     ASSERT((_kern_ocram_start & (0x1000 - 1)) == 0,
         "kern_ocram (code) does not start on a 4096-byte page boundary")
@@ -325,7 +339,7 @@ SECTIONS
 
     /* The runtime OCRAM footprint (image through .bss) must not collide with the
        stacks, which grow down from the top. Lowest stack is now CPU1's SYS bank. */
-    ASSERT(_bss_end <= _cpu1_sys_stack_top - _stack_size,
+    ASSERT(_bss_end <= _cpu1_sys_stack_top - _sys_stack_size,
         "OCRAM image + CPU0/CPU1 stacks exceed the 64K OCRAM")
 
     /* Boot ROM copies the loaded image (vectors + code + rodata + data) into the

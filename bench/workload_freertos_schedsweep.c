@@ -29,10 +29,10 @@ static const uint32_t sched_levels[] =
 /* Host-readable: the x-axis (task counts) and, per level, the raw per-tick scheduler
  * overhead samples (cycles). test_freertos.py reduces each row to min/mean/p50/p99/max.
  * Distinct names from the Kairos g_schedsweep_* so both workloads can coexist in CORE. */
-HOST_SHARED uint32_t g_frtos_sched_levels[ SCHED_N_LEVELS ];
-HOST_SHARED uint32_t g_frtos_sched_n;
-HOST_SHARED uint32_t g_frtos_sched_samples[ SCHED_N_LEVELS ][ SCHED_SAMPLES ];
-HOST_SHARED volatile uint32_t g_frtos_sched_counts[ SCHED_N_LEVELS ];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_frtos_sched_levels[ SCHED_N_LEVELS ];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_frtos_sched_n;
+SDRAM_UNCACHED_TELEMETRY uint32_t g_frtos_sched_samples[ SCHED_N_LEVELS ][ SCHED_SAMPLES ];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_frtos_sched_counts[ SCHED_N_LEVELS ];
 
 static volatile uint32_t sweep_active = 0u;
 static volatile uint32_t sweep_level  = 0u;

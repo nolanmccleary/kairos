@@ -62,9 +62,9 @@ const uint32_t g_pp_persist_ids[PP_NPERSIST]  = { PP_ID_HI_0, PP_ID_HI_1, PP_ID_
 const uint32_t g_pp_persist_prio[PP_NPERSIST] = { HIGH_PRIORITY, HIGH_PRIORITY, HIGH_PRIORITY, MED_PRIORITY, LOW_PRIORITY };
 
 /* Host-visible outcomes (uncached host_shared, read straight over JTAG). */
-HOST_SHARED volatile uint32_t g_pp_periodic_assign[PP_NPERIODIC];   /* periodic id -> core the balancer chose */
-HOST_SHARED volatile uint32_t g_pp_periodic_done[PP_NPERIODIC];     /* periodic per-task completions */
-HOST_SHARED volatile uint32_t g_pp_persist_assign[PP_NPERSIST];     /* persistent id -> core the balancer chose */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_pp_periodic_assign[PP_NPERIODIC];   /* periodic id -> core the balancer chose */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_pp_periodic_done[PP_NPERIODIC];     /* periodic per-task completions */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_pp_persist_assign[PP_NPERSIST];     /* persistent id -> core the balancer chose */
 
 /* Owned by workload_edf.c; reused here. */
 extern uint32_t trace_active;

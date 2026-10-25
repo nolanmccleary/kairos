@@ -194,8 +194,8 @@ bss_zero:
     blt bss_zero
 
 @; Zero the OCRAM host island (fault records, boot gate, SMP mailbox)
-    ldr r0, =_host_shared_ocram_start
-    ldr r1, =_host_shared_ocram_end
+    ldr r0, =_ocram_uncached_start
+    ldr r1, =_ocram_uncached_end
     mov r2, #0
 host_ocram_zero:
     cmp r0, r1
@@ -226,15 +226,13 @@ host_ocram_zero:
 .endif
     bl cpu0_startup         @; RUN CP0 STARTUP AND SET MAILBOX
 
-.if MODE_TEST != 0
-    ldr r0, =_host_shared_sdram_start
-    ldr r1, =_host_shared_sdram_end
+    ldr r0, =_sdram_uncached_start
+    ldr r1, =_sdram_uncached_end
     mov r2, #0
-host_shared_sdram_zero:
+sdram_uncached_zero:
     cmp r0, r1
     strlt r2, [r0], #4
-    blt host_shared_sdram_zero
-.endif
+    blt sdram_uncached_zero
 
 .if USE_FIQ != 0
     cpsie if                @; USE_FIQ: unmask FIQ (the tick) as well as IRQ

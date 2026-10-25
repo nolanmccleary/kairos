@@ -34,7 +34,7 @@ static thread_fifo_t high_fifos[NUM_CPUS];
     __asm__ __volatile__(                          \
         "cps #0x1f\n\t"                            \
         "mov r0, sp\n\t"                           \
-        "cps #" SCHED_HANDLER_MODE "\n\t"           \
+        "cps #" SCHED_HANDLER_MODE "\n\t"          \
         "mov %0, r0\n\t"                           \
         : "=r"(dst)                                \
         :                                          \
@@ -45,7 +45,7 @@ static thread_fifo_t high_fifos[NUM_CPUS];
         "mov r0, %0\n\t"                           \
         "cps #0x1f\n\t"                            \
         "mov sp, r0\n\t"                           \
-        "cps #" SCHED_HANDLER_MODE "\n\t"           \
+        "cps #" SCHED_HANDLER_MODE "\n\t"          \
         :                                          \
         : "r"(src)                                 \
         : "r0", "memory")

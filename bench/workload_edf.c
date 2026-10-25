@@ -51,14 +51,14 @@ const uint32_t g_edf_periods[NTASKS] =
 
 /* EDF test/JTAG state -- host_shared (uncached), read/written directly. These
  * are pure test payload, not perf-critical system data, so no caching wanted. */
-HOST_SHARED volatile uint32_t g_edf_u_index;
-HOST_SHARED volatile uint32_t g_edf_u_permille;
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_u_index;
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_u_permille;
 
-HOST_SHARED volatile uint32_t g_edf_C[NTASKS];
-HOST_SHARED volatile uint32_t g_edf_done[NTASKS];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_C[NTASKS];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_done[NTASKS];
 
-HOST_SHARED volatile uint8_t  g_sched_trace[NUM_CPUS][TRACE_TICKS];
-HOST_SHARED volatile uint32_t g_trace_len[NUM_CPUS];
+SDRAM_UNCACHED_TELEMETRY volatile uint8_t  g_sched_trace[NUM_CPUS][TRACE_TICKS];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_trace_len[NUM_CPUS];
 
 uint32_t trace_active;   /* 1 while a trial is running (every trial is traced); shared with workload_persistent.c */
 static uint32_t iters[NTASKS];
@@ -71,11 +71,11 @@ static uint32_t iters[NTASKS];
 /* MIRRORS: cached, system-owned globals cloned into host_shared every tick by
  * ktrace_edf_tick, so the debugger reads coherent values without the CPU paying
  * for uncached access on the hot paths. */
-HOST_SHARED thread_metrics_t g_edf_metrics[NTASKS];   /* <- running->metrics (cached thread_t)  */
-HOST_SHARED uint32_t  g_ticks_m[NUM_CPUS];
-HOST_SHARED uint32_t  g_misses_m[NUM_CPUS];
-HOST_SHARED uint32_t  g_overhead_m[NUM_CPUS];
-HOST_SHARED uint32_t  g_core_u_m[NUM_CPUS];   /* per-core utilization, fixed-point /65536 */
+SDRAM_UNCACHED_TELEMETRY thread_metrics_t g_edf_metrics[NTASKS];   /* <- running->metrics (cached thread_t)  */
+SDRAM_UNCACHED_TELEMETRY uint32_t  g_ticks_m[NUM_CPUS];
+SDRAM_UNCACHED_TELEMETRY uint32_t  g_misses_m[NUM_CPUS];
+SDRAM_UNCACHED_TELEMETRY uint32_t  g_overhead_m[NUM_CPUS];
+SDRAM_UNCACHED_TELEMETRY uint32_t  g_core_u_m[NUM_CPUS];   /* per-core utilization, fixed-point /65536 */
 
 
 
@@ -102,12 +102,12 @@ static volatile uint32_t g_task_started[NUM_CPUS][NTASKS];
 static volatile uint32_t g_task_start_snap[NUM_CPUS][NTASKS];
 static volatile uint32_t g_task_trial[NUM_CPUS][NTASKS];   /* g_edf_u_index the tracking is for */
 
-HOST_SHARED volatile uint32_t g_edf_bad_thread;    /* offending thread_t*                  */
-HOST_SHARED volatile uint32_t g_edf_bad_core;      /* core whose watchdog tripped          */
-HOST_SHARED volatile uint32_t g_edf_bad_task;      /* task index 0..NTASKS-1               */
-HOST_SHARED volatile uint32_t g_edf_bad_expected;  /* value the harness set                */
-HOST_SHARED volatile uint32_t g_edf_bad_actual;    /* value found                          */
-HOST_SHARED volatile uint32_t g_edf_bad_tick;      /* tick at detection                    */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_bad_thread;    /* offending thread_t*                  */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_bad_core;      /* core whose watchdog tripped          */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_bad_task;      /* task index 0..NTASKS-1               */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_bad_expected;  /* value the harness set                */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_bad_actual;    /* value found                          */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_bad_tick;      /* tick at detection                    */
 
 
 
@@ -537,8 +537,8 @@ void edf_run(void)
 
 const uint32_t g_bal_periods[BAL_NTASKS] = { 40u, 40u, 60u, 60u, 100u, 100u };
 
-HOST_SHARED volatile uint32_t g_bal_assign[BAL_NTASKS];   /* id -> assigned core */
-HOST_SHARED volatile uint32_t g_bal_done[BAL_NTASKS];     /* per-task completions */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_bal_assign[BAL_NTASKS];   /* id -> assigned core */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_bal_done[BAL_NTASKS];     /* per-task completions */
 
 static uint32_t bal_iters[BAL_NTASKS];
 

@@ -24,10 +24,10 @@ static const uint32_t tickirq_periods[TICKIRQ_N] = { 10u, 20u, 25u, 50u };
 
 
 /* Host-readable results. test.py checks count[i] ~= run_ticks / period[i]. */
-HOST_SHARED volatile uint32_t g_tickirq_count[TICKIRQ_N];
-HOST_SHARED uint32_t          g_tickirq_periods[TICKIRQ_N];
-HOST_SHARED uint32_t          g_tickirq_run_ticks;
-HOST_SHARED uint32_t          g_tickirq_n;
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_tickirq_count[TICKIRQ_N];
+SDRAM_UNCACHED_TELEMETRY uint32_t          g_tickirq_periods[TICKIRQ_N];
+SDRAM_UNCACHED_TELEMETRY uint32_t          g_tickirq_run_ticks;
+SDRAM_UNCACHED_TELEMETRY uint32_t          g_tickirq_n;
 
 
 /* One callback per IRQ -- the func takes no args, so each bumps its own counter. */

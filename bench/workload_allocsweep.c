@@ -36,10 +36,10 @@ static const uint32_t sweep_sizes[] =
 
 /* Host-readable: the x-axis (the sizes + their count) and, per size, the alloc and
  * free cycle distributions (min / max / sum / count -> mean). */
-HOST_SHARED uint32_t g_allocsweep_sizes[ SWEEP_N_SIZES ];
-HOST_SHARED uint32_t g_allocsweep_n;
-HOST_SHARED metric_t g_allocsweep_alloc[ SWEEP_N_SIZES ];
-HOST_SHARED metric_t g_allocsweep_free[ SWEEP_N_SIZES ];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_allocsweep_sizes[ SWEEP_N_SIZES ];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_allocsweep_n;
+SDRAM_UNCACHED_TELEMETRY metric_t g_allocsweep_alloc[ SWEEP_N_SIZES ];
+SDRAM_UNCACHED_TELEMETRY metric_t g_allocsweep_free[ SWEEP_N_SIZES ];
 
 
 static inline void sw_reset( metric_t* m )

@@ -8,6 +8,10 @@
 #define ALPHA 2
 
 
+#define OCRAM_UNCACHED_MAILBOX __attribute__((section(".ocram_uncached_mailbox"), used))
+
+
+
 static inline bool gt_wrapped(uint32_t a, uint32_t b)
 {
     return ((int32_t)(a - b) > 0);

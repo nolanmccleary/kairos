@@ -37,10 +37,10 @@ static const uint32_t frag_levels[] =
 
 /* Host-readable: the x-axis (free-list length) and, per level, the alloc and free
  * cost distributions. Same metric_t layout as the size sweep. */
-HOST_SHARED uint32_t g_fragsweep_levels[ FS_N_LEVELS ];
-HOST_SHARED uint32_t g_fragsweep_n;
-HOST_SHARED metric_t g_fragsweep_alloc[ FS_N_LEVELS ];
-HOST_SHARED metric_t g_fragsweep_free[ FS_N_LEVELS ];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_fragsweep_levels[ FS_N_LEVELS ];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_fragsweep_n;
+SDRAM_UNCACHED_TELEMETRY metric_t g_fragsweep_alloc[ FS_N_LEVELS ];
+SDRAM_UNCACHED_TELEMETRY metric_t g_fragsweep_free[ FS_N_LEVELS ];
 
 
 static inline void fs_reset( metric_t* m )

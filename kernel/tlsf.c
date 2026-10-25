@@ -12,14 +12,6 @@
 mutex_t g_allocator_mutex;
 
 
-void *memset(void *s, int c, size_t n)   // freestanding build has no libc; sequencer.c and struct inits need it
-{
-    unsigned char *p = s;
-    while (n--) *p++ = (unsigned char)c;
-    return s;
-}
-
-
 // Our heap is 16MB so 2^24 -> bins 0 through 23; 32 sub-bins, last bin interval (binterval haha) is [2^23, 2^24)
 #define FL_COUNT 24
 #define SL_COUNT 32

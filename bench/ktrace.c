@@ -9,7 +9,7 @@
 /* Debugger WRITES these, CPU reads them -- a mirror can't serve a host write
  * into a cached read, so they must be plain-uncached (host_shared). Set at
  * runtime before use; the NOLOAD region isn't zeroed at boot. */
-HOST_SHARED_OCRAM volatile uint32_t g_test_release;
+OCRAM_UNCACHED_TELEMETRY volatile uint32_t g_test_release;
 
 
 #define KTRACE_BP_ATTR \
@@ -166,11 +166,11 @@ extern volatile uint32_t g_trace_len[NUM_CPUS];
 
 /* One row per tick-IRQ fire. Parallel arrays (no new struct): x-index aligns with the
  * thread trace (g_trace_len at fire time), plus core and IRQ id. */
-HOST_SHARED volatile uint32_t g_irq_ev_x[KTRACE_IRQ_EVENTS_MAX];
-HOST_SHARED volatile uint32_t g_irq_ev_core[KTRACE_IRQ_EVENTS_MAX];
-HOST_SHARED volatile uint32_t g_irq_ev_id[KTRACE_IRQ_EVENTS_MAX];
-HOST_SHARED volatile uint32_t g_irq_ev_cycles[KTRACE_IRQ_EVENTS_MAX];
-HOST_SHARED volatile uint32_t g_irq_ev_count;
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_irq_ev_x[KTRACE_IRQ_EVENTS_MAX];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_irq_ev_core[KTRACE_IRQ_EVENTS_MAX];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_irq_ev_id[KTRACE_IRQ_EVENTS_MAX];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_irq_ev_cycles[KTRACE_IRQ_EVENTS_MAX];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_irq_ev_count;
 
 void ktrace_irq_fire(uint32_t core, uint32_t id, uint32_t cycles)
 {
@@ -228,7 +228,7 @@ void ktrace_wait_release(void)
  * Zeroed on entry so an uninitialized/garbage value can't skip the gate; runs
  * before c_startup(), i.e. MMU + caches off, so the flag is plain physical
  * memory the debugger reads/writes coherently. */
-HOST_SHARED_OCRAM volatile uint32_t g_boot_release;
+OCRAM_UNCACHED_TELEMETRY volatile uint32_t g_boot_release;
 
 void ktrace_wait_boot(void)
 {

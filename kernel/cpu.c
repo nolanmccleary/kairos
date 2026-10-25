@@ -4,7 +4,7 @@
 #include "telemetry.h"
 
 
-HOST_SHARED_OCRAM volatile uint32_t g_cpu_mailbox_uncached;
+OCRAM_UNCACHED_MAILBOX volatile uint32_t g_cpu_mailbox_uncached;
 
 
 cpu_t g_cpus[NUM_CPUS];

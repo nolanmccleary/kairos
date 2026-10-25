@@ -17,12 +17,12 @@
 
 /* volatile + a full read-back of mat_out defeats DCE of the multiply and lets
  * the host confirm the result is bit-identical across I-cache on/off builds.
- * HOST_SHARED (uncached OCRAM) so JTAG reads it coherently. */
-HOST_SHARED volatile uint32_t g_matmul_checksum;
+ * SDRAM_UNCACHED_TELEMETRY (uncached OCRAM) so JTAG reads it coherently. */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_matmul_checksum;
 
 
 /* Per-rep cycle counts so the host can watch the I-cache warm up (rep 0 cold). */
-HOST_SHARED uint32_t g_matmul_samples[MATMUL_REPS];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_matmul_samples[MATMUL_REPS];
 
 
 void matmul_run(void)

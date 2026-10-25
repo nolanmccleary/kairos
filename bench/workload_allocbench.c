@@ -27,7 +27,7 @@ static void* loaded_blocks[LOADED_ALLOC_COUNT];
 /* Every per-iteration cycle count, so the host can plot the full timing
  * distribution (the g_metrics slots keep only min/max/mean). SDRAM-resident
  * (8192 bytes); the host reads ALLOC_ITERS samples per op. */
-HOST_SHARED uint32_t g_alloc_samples[ALLOC_OP_COUNT][ALLOC_ITERS];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_alloc_samples[ALLOC_OP_COUNT][ALLOC_ITERS];
 
 
 void allocbench_run(void)

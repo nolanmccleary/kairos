@@ -195,6 +195,7 @@ void ktrace_wait_boot(void);
 
 #define KTRACE_WAIT_BOOT()           ((void)0)
 
+#define KTRACE_IRQ_FIRE(core, id, cycles) ((void)0) 
 
 #endif
 

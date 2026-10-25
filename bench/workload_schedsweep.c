@@ -30,10 +30,10 @@ static const uint32_t sched_levels[] =
 
 /* Host-readable: the x-axis (task counts) and, per level, the raw per-tick scheduler
  * overhead samples (cycles). test.py reduces each row to min/mean/p50/p99/max. */
-HOST_SHARED uint32_t g_schedsweep_levels[ SCHED_N_LEVELS ];
-HOST_SHARED uint32_t g_schedsweep_n;
-HOST_SHARED uint32_t g_schedsweep_samples[ SCHED_N_LEVELS ][ SCHED_SAMPLES ];
-HOST_SHARED volatile uint32_t g_schedsweep_counts[ SCHED_N_LEVELS ];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_schedsweep_levels[ SCHED_N_LEVELS ];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_schedsweep_n;
+SDRAM_UNCACHED_TELEMETRY uint32_t g_schedsweep_samples[ SCHED_N_LEVELS ][ SCHED_SAMPLES ];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_schedsweep_counts[ SCHED_N_LEVELS ];
 
 static volatile uint32_t sweep_active = 0u;
 static volatile uint32_t sweep_level  = 0u;

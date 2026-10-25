@@ -46,10 +46,10 @@
 
 /* --- ctx-switch ------------------------------------------------------------ */
 
-HOST_SHARED uint32_t g_ctxsw_switch[CTXSW_SAMPLES];
-HOST_SHARED uint32_t g_ctxsw_resume[CTXSW_SAMPLES];
-HOST_SHARED volatile uint32_t g_ctxsw_switch_count;   /* unbounded; samples capped at CTXSW_SAMPLES */
-HOST_SHARED volatile uint32_t g_ctxsw_resume_count;
+SDRAM_UNCACHED_TELEMETRY uint32_t g_ctxsw_switch[CTXSW_SAMPLES];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_ctxsw_resume[CTXSW_SAMPLES];
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_ctxsw_switch_count;   /* unbounded; samples capped at CTXSW_SAMPLES */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_ctxsw_resume_count;
 
 static volatile uint32_t ctxsw_active;
 
@@ -139,7 +139,7 @@ static void ctxsw_run(void)
 
 /* --- IRQ dispatch latency -------------------------------------------------- */
 
-HOST_SHARED uint32_t g_irqlat[IRQ_SAMPLES];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_irqlat[IRQ_SAMPLES];
 
 static volatile uint32_t irq_ping_done;
 static volatile uint32_t irq_ping_t1;
@@ -190,8 +190,8 @@ static void irqlat_run(void)
 
 /* --- mutex ----------------------------------------------------------------- */
 
-HOST_SHARED uint32_t g_mutex_unc[MUTEX_SAMPLES];
-HOST_SHARED uint32_t g_mutex_con[MUTEX_SAMPLES];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_mutex_unc[MUTEX_SAMPLES];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_mutex_con[MUTEX_SAMPLES];
 
 static mutex_t micro_mutex;                 /* Normal cacheable -- ldrex/strex need it */
 static volatile uint32_t mutex_hold_stop;
@@ -267,14 +267,14 @@ static void mutex_run(void)
 
 /* --- uncached memory-access latency (SDRAM vs OCRAM) ----------------------- */
 
-HOST_SHARED uint32_t g_memlat_sdram_rd[MEMLAT_SAMPLES];
-HOST_SHARED uint32_t g_memlat_sdram_wr[MEMLAT_SAMPLES];
-HOST_SHARED uint32_t g_memlat_ocram_rd[MEMLAT_SAMPLES];
-HOST_SHARED uint32_t g_memlat_ocram_wr[MEMLAT_SAMPLES];
-HOST_SHARED uint32_t g_memlat_baseline;             /* empty-window pmu+dsb overhead */
+SDRAM_UNCACHED_TELEMETRY uint32_t g_memlat_sdram_rd[MEMLAT_SAMPLES];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_memlat_sdram_wr[MEMLAT_SAMPLES];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_memlat_ocram_rd[MEMLAT_SAMPLES];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_memlat_ocram_wr[MEMLAT_SAMPLES];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_memlat_baseline;             /* empty-window pmu+dsb overhead */
 
-HOST_SHARED       volatile uint32_t g_memlat_sdram_target;   /* uncached SDRAM word (.telemetry) */
-HOST_SHARED_OCRAM volatile uint32_t g_memlat_ocram_target;   /* uncached OCRAM word (.host_ocram) */
+SDRAM_UNCACHED_TELEMETRY       volatile uint32_t g_memlat_sdram_target;   /* uncached SDRAM word (.telemetry) */
+OCRAM_UNCACHED_TELEMETRY volatile uint32_t g_memlat_ocram_target;   /* uncached OCRAM word (.host_ocram) */
 
 
 static volatile uint32_t memlat_sink;   /* consume the loaded value so it isn't dead-code-eliminated */
@@ -336,7 +336,7 @@ static void memlat_run(void)
 
 /* Progress marker the host polls to localize a stall: 1=ctxsw 2=irqlat 3=mutex
  * 4=memlat 5=done. If the suite ever hangs, the phase that failed to advance names it. */
-HOST_SHARED volatile uint32_t g_micro_phase;
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_micro_phase;
 
 
 void micro_run(void)

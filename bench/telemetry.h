@@ -7,28 +7,10 @@
 #include "pmu.h"
 
 
-/* Two uncached, JTAG-coherent host regions (everything else -- text/data/bss/
- * stacks/heap -- is Normal-cacheable, so anything the debugger reads/writes must
- * live in one of these). Both are Device-mapped by build_tables().
- *
- *   HOST_SHARED       -> .telemetry, in SDRAM. Bulk benchmark/EDF telemetry,
- *                        written only after SDRAM is calibrated and mapped.
- *   HOST_SHARED_OCRAM -> .host_ocram, in OCRAM. The few globals that must be
- *                        reachable when SDRAM is not: crash records, the
- *                        pre-c_startup boot gate, and the SMP bring-up mailbox. */
-#define HOST_SHARED       __attribute__((section(".telemetry"), used))
-#define HOST_SHARED_OCRAM __attribute__((section(".host_ocram"), used))
+#define SDRAM_UNCACHED_TELEMETRY       __attribute__((section(".sdram_uncached_telemetry"), used))
+#define OCRAM_UNCACHED_TELEMETRY __attribute__((section(".ocram_uncached_telemetry"), used))
 
 
-/* -------------------------------------------------------------------------
- * Host-readable metric table
- *
- * One cycle-count distribution (min / max / running sum / count) per slot. The
- * table lives in the uncached .telemetry region (see linker .host_shared), so a
- * CPU write is visible to a JTAG phys read with no cache maintenance. NOLOAD:
- * the firmware must metric_reset() each slot before use -- power-on OCRAM is
- * garbage, and min starts at 0xFFFFFFFF.
- * ------------------------------------------------------------------------- */
 
 typedef struct
 {

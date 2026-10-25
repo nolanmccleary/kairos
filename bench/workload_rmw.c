@@ -18,7 +18,7 @@
 /* Per-pass cycle counts so the host can watch the cache warm up (pass 0 cold-fills,
  * later passes hit cache). Row 0 = 8KB (64 passes), row 1 = 256KB (16 passes, rest
  * left zero). Rows sized to the larger pass count. */
-HOST_SHARED uint32_t g_rmw_samples[2][RMW_8KB_PASSES];
+SDRAM_UNCACHED_TELEMETRY uint32_t g_rmw_samples[2][RMW_8KB_PASSES];
 
 
 /* noinline so the two callers share one copy -- OCRAM is tight. Uncached SDRAM:

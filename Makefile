@@ -31,6 +31,8 @@ endif
 # Sources
 # ---------------------------------------------------------------------------
 
+# Core kernel image. No test payload -- this is what ships. A test build (TEST=1)
+# appends the benchmark/validation sources below.
 CORE := \
 	main.c \
 	kernel/kernel.s \
@@ -38,6 +40,7 @@ CORE := \
 	bsp/boot.c \
 	bsp/sequencer.c \
 	bsp/sd.c \
+	kernel/memset.c \
 	kernel/tlsf.c \
 	kernel/sched.c \
 	kernel/thread_fifo.c \
@@ -49,9 +52,20 @@ CORE := \
 	kernel/irq.c \
 	kernel/lock.c \
 	kernel/timers.c \
-	bench/ktrace.c \
 	kernel/fault.c \
+	kernel/mutex.s \
+
+
+# Shared test infrastructure: host breakpoints, the per-tick trace hook, the metrics
+# region. Compiled only in a test image (TEST=1, or the FreeRTOS battery).
+TEST_INFRA := \
+	bench/ktrace.c \
 	bench/telemetry.c \
+
+
+# Kairos benchmark/validation workloads -- the host-driven test payload (test.py drives
+# it). Deliberately NOT part of the core kernel; compiled only with TEST=1.
+TEST_WORKLOADS := \
 	bench/workload_edf.c \
 	bench/workload_allocbench.c \
 	bench/workload_rmw.c \
@@ -64,7 +78,6 @@ CORE := \
 	bench/workload_schedsweep.c \
 	bench/workload_tickirq.c \
 	bench/workload_gantt.c \
-	kernel/mutex.s \
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +104,29 @@ USE_FIQ ?= 0    # drive the scheduler tick as an FIQ (Group 0) instead of an IRQ
 # enable with `make boot`, drive with `python test.py --bootable`.
 BOOT_TEST     ?= 0
 
+
+# Test image: TEST=1 compiles the benchmark/validation payload and defines MODE_TEST.
+# The default build is the bare core kernel with no test payload. The FreeRTOS battery
+# is also a test image. MODE_TEST gates the whole payload (ktrace hooks, benches, the
+# body of main()).
+TEST ?= 0
+
+MODE_TEST := 0
+ifeq ($(TEST),1)
+  MODE_TEST := 1
+endif
+ifeq ($(FREERTOS),1)
+  MODE_TEST := 1
+endif
+
+ifeq ($(MODE_TEST),1)
+  CORE += $(TEST_INFRA)
+endif
+ifeq ($(TEST),1)
+  CORE += $(TEST_WORKLOADS)
+endif
+
+
 CFLAGS := \
 	-mcpu=cortex-a9 \
 	-marm \
@@ -106,7 +142,6 @@ CFLAGS := \
 	-Ibench \
 	$(BOARD_CDEFS) \
 	-DBOARD=$(BOARD_ID) \
-	-DMODE_TEST \
 	-DENABLE_MMU=$(ENABLE_MMU) \
 	-DENABLE_DCACHE=$(ENABLE_DCACHE) \
 	-DENABLE_ICACHE=$(ENABLE_ICACHE) \
@@ -118,10 +153,14 @@ CFLAGS := \
 	-Wa,--defsym,ENABLE_SMP=$(ENABLE_SMP) \
 	-Wa,--defsym,BOOT_TEST=$(BOOT_TEST) \
 	-Wa,--defsym,USE_FIQ=$(USE_FIQ) \
-	-Wa,--defsym,MODE_TEST=1 \
+	-Wa,--defsym,MODE_TEST=$(MODE_TEST) \
 	-Wa,--defsym,BOARD_GICC_BASE=$(BOARD_GICC_BASE) \
 	-Wa,--defsym,BOARD_IS_QEMU=$(BOARD_IS_QEMU) \
 	-Wa,--defsym,USE_FREERTOS=$(FREERTOS)
+
+ifeq ($(MODE_TEST),1)
+  CFLAGS += -DMODE_TEST
+endif
 
 
 # FreeRTOS battery (make FREERTOS=1). The ONE FreeRTOS binary: FreeRTOS scheduler + heap_4,
@@ -187,15 +226,16 @@ build/test.elf: $(OBJ) $(LDSCRIPT)
 
 
 # ---------------------------------------------------------------------------
-# Test: build + drive the harness over JTAG (test.py loads the image + runs it)
+# Test: build the test image (TEST=1) + drive the harness over JTAG.
 # ---------------------------------------------------------------------------
 
-test: build/test.elf
+test:
+	$(MAKE) TEST=1 build/test.elf
 	python3 test.py
 
 
 # ---------------------------------------------------------------------------
-# Self-boot: the ONE image + the BOOT_TEST gate, wrapped as a preloader and
+# Self-boot: the ONE test image + the BOOT_TEST gate, wrapped as a preloader and
 # written to the microSD's 0xA2 partition (scripts/flash_sd.sh locates the card
 # safely and writes only that slice -- no reformat). Power-cycle, then drive with
 # `python test.py --bootable`. Force-rebuilds test.elf (only a -D flag changes,
@@ -206,9 +246,9 @@ test: build/test.elf
 
 boot:
 	rm -rf build
-	$(MAKE) BOOT_TEST=1 build/test.elf
-	$(OBJCOPY) -O binary -R .appcode -R .kern_sdram build/test.elf build/preloader.bin
-	$(OBJCOPY) -O binary -j .appcode -j .kern_sdram build/test.elf build/app.bin
+	$(MAKE) BOOT_TEST=1 TEST=1 build/test.elf
+	$(OBJCOPY) -O binary -R .appcode -R .kern_sdram -R .kern_sdram_bss build/test.elf build/preloader.bin
+	$(OBJCOPY) -O binary -j .appcode -j .kern_sdram -j .kern_sdram_bss build/test.elf build/app.bin
 	@echo "preloader.bin: $$(wc -c < build/preloader.bin) bytes (OCRAM; must fit the boot ROM budget)"
 	@echo "app.bin:       $$(wc -c < build/app.bin) bytes (SDRAM app/test code; load_from_sd reads this from SD)"
 	mkimage -T socfpgaimage -d build/preloader.bin build/preloader.img && echo "wrote build/preloader.img"
@@ -223,9 +263,9 @@ clean:
 # Lint = two analyzers over our sources (warnings are off in the normal build).
 # Skips bsp/sequencer.c (vendor-generated Altera SDRAM calibration; its sign-compare/
 # unused noise isn't ours to fix). Both track the ENABLE_* config, so e.g.
-# `make ENABLE_SMP=0 lint` lints that variant.
+# `make ENABLE_SMP=0 lint` lints that variant. Lints the full test image.
 LINT_WARN := -Wall -Wextra -Wshadow -Wundef -Wpointer-arith
-LINT_SRC  := $(filter-out bsp/sequencer.c,$(filter %.c,$(CORE)))
+LINT_SRC  := $(filter-out bsp/sequencer.c,$(filter %.c,$(CORE) $(TEST_INFRA) $(TEST_WORKLOADS)))
 
 LINT_DEFS := $(BOARD_CDEFS) -DBOARD=$(BOARD_ID) -DMODE_TEST -DENABLE_MMU=$(ENABLE_MMU) \
 	-DENABLE_DCACHE=$(ENABLE_DCACHE) -DENABLE_ICACHE=$(ENABLE_ICACHE) \
