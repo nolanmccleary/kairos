@@ -298,6 +298,20 @@ static void set_ttb_ptrs(void)
 }
 
 
+// .sdram_bss is NOLOAD, so nothing loads it; zero it once SDRAM is up, before psched_init reads it.
+static void zero_sdram_bss(void)
+{
+    extern char _sdram_bss_start[];
+    extern char _sdram_bss_end[];
+
+    uint32_t* word_ptr = (uint32_t*)_sdram_bss_start;
+    uint32_t* end_ptr  = (uint32_t*)_sdram_bss_end;
+
+    while (word_ptr < end_ptr)
+    {
+        *word_ptr++ = 0;
+    }
+}
 
 
 void cpu0_startup(void)
@@ -310,6 +324,8 @@ void cpu0_startup(void)
     bsp_precache_init();
     build_tables();
     set_ttb_ptrs();
+
+    zero_sdram_bss();
 
     pmu_init();
     load_from_sd();

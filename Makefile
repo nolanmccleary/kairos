@@ -1,13 +1,33 @@
 CROSS   := arm-none-eabi
-
 CC      := $(CROSS)-gcc
 OBJCOPY := $(CROSS)-objcopy
 OBJDUMP := $(CROSS)-objdump
 NM      := $(CROSS)-nm
 
-# Board selection: cyclone_v (DE1-SoC, real HW) | qemu (vexpress-a9, emulated).
-# MODE_TEST is orthogonal -- any board builds with or without the test payload.
-BOARD ?= cyclone_v
+
+
+BOARD     ?= cyclone_v
+TEST      ?= 0
+FREERTOS  ?= 0
+BOOT_TEST ?= 0
+
+ENABLE_MMU        ?= 1
+ENABLE_DCACHE     ?= 1
+ENABLE_ICACHE     ?= 1
+ENABLE_L2         ?= 1
+ENABLE_SMP        ?= 1
+ENABLE_NULL_GUARD ?= 1
+USE_FIQ           ?= 0
+
+# The FreeRTOS battery is always a test image.
+ifeq ($(FREERTOS),1)
+TEST := 1
+endif
+
+
+# ---------------------------------------------------------------------------
+# Board
+# ---------------------------------------------------------------------------
 
 ifeq ($(BOARD),cyclone_v)
   BOARD_ID        := BOARD_CYCLONE_V
@@ -26,13 +46,11 @@ else
 endif
 
 
-
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
 
-# Core kernel image. No test payload -- this is what ships. A test build (TEST=1)
-# appends the benchmark/validation sources below.
+# Core kernel image -- what ships; a test build appends the payload below.
 CORE := \
 	main.c \
 	kernel/kernel.s \
@@ -53,18 +71,12 @@ CORE := \
 	kernel/lock.c \
 	kernel/timers.c \
 	kernel/fault.c \
-	kernel/mutex.s \
+	kernel/mutex.s
 
+# Host breakpoints, the per-tick trace hook, the metrics region; test images only.
+TEST_INFRA := bench/ktrace.c bench/telemetry.c
 
-# Shared test infrastructure: host breakpoints, the per-tick trace hook, the metrics
-# region. Compiled only in a test image (TEST=1, or the FreeRTOS battery).
-TEST_INFRA := \
-	bench/ktrace.c \
-	bench/telemetry.c \
-
-
-# Kairos benchmark/validation workloads -- the host-driven test payload (test.py drives
-# it). Deliberately NOT part of the core kernel; compiled only with TEST=1.
+# Kairos benchmark/validation workloads (test.py drives them); Kairos battery only.
 TEST_WORKLOADS := \
 	bench/workload_edf.c \
 	bench/workload_allocbench.c \
@@ -77,56 +89,40 @@ TEST_WORKLOADS := \
 	bench/workload_fragsweep.c \
 	bench/workload_schedsweep.c \
 	bench/workload_tickirq.c \
-	bench/workload_gantt.c \
+	bench/workload_gantt.c
+
+# FreeRTOS battery sources (FREERTOS=1).
+FK := freertos_port/FreeRTOS-Kernel
+FREERTOS_SRC := \
+	$(FK)/portable/MemMang/heap_4.c \
+	freertos_port/freertos_heap_shim.c \
+	$(FK)/tasks.c \
+	$(FK)/list.c \
+	$(FK)/queue.c \
+	$(FK)/portable/GCC/ARM_CA9/port.c \
+	$(FK)/portable/GCC/ARM_CA9/portASM.S \
+	freertos_port/freertos_glue.c \
+	freertos_port/freertos_main.c \
+	bench/workload_freertos_schedsweep.c
+
+# Assemble the final source list. TEST adds the infra; the Kairos workloads go in only
+# for the Kairos battery ($(TEST)$(FREERTOS) == 10); FreeRTOS brings its own payload.
+ifeq ($(TEST),1)
+CORE += $(TEST_INFRA)
+endif
+ifeq ($(TEST)$(FREERTOS),10)
+CORE += $(TEST_WORKLOADS)
+endif
+ifeq ($(FREERTOS),1)
+CORE += $(FREERTOS_SRC)
+endif
 
 
 # ---------------------------------------------------------------------------
 # Compiler / linker
 # ---------------------------------------------------------------------------
 
-# Cache/MMU enables -- single source of truth: compiled into the code AND emitted
-# as absolute symbols (LDFLAGS below) so the host reads the config straight from
-# the .elf symbol table, without any runtime field or loaded-image inflation.
-ENABLE_MMU    ?= 1
-ENABLE_DCACHE ?= 1
-ENABLE_ICACHE ?= 1
-ENABLE_L2     ?= 1   # PL310 outer (L2) cache; requires ENABLE_MMU
-ENABLE_SMP    ?= 1
-ENABLE_NULL_GUARD ?= 1   # unmap VA 0..1MB so NULL / near-NULL derefs fault (needs ENABLE_MMU)
-
-FREERTOS ?= 0   # 0 = Kairos battery (test.py), 1 = FreeRTOS battery (test_freertos.py)
-
-USE_FIQ ?= 0    # drive the scheduler tick as an FIQ (Group 0) instead of an IRQ
-
-
-# Self-boot test gate: compile the spin at the top of main() that hangs until
-# JTAG writes g_boot_release. Needed only for the no-debugger SD boot flow --
-# enable with `make boot`, drive with `python test.py --bootable`.
-BOOT_TEST     ?= 0
-
-
-# Test image: TEST=1 compiles the benchmark/validation payload and defines MODE_TEST.
-# The default build is the bare core kernel with no test payload. The FreeRTOS battery
-# is also a test image. MODE_TEST gates the whole payload (ktrace hooks, benches, the
-# body of main()).
-TEST ?= 0
-
-MODE_TEST := 0
-ifeq ($(TEST),1)
-  MODE_TEST := 1
-endif
-ifeq ($(FREERTOS),1)
-  MODE_TEST := 1
-endif
-
-ifeq ($(MODE_TEST),1)
-  CORE += $(TEST_INFRA)
-endif
-ifeq ($(TEST),1)
-  CORE += $(TEST_WORKLOADS)
-endif
-
-
+# Cache/MMU config: compiled in AND emitted as .elf symbols (LDFLAGS) so the host reads it.
 CFLAGS := \
 	-mcpu=cortex-a9 \
 	-marm \
@@ -153,37 +149,23 @@ CFLAGS := \
 	-Wa,--defsym,ENABLE_SMP=$(ENABLE_SMP) \
 	-Wa,--defsym,BOOT_TEST=$(BOOT_TEST) \
 	-Wa,--defsym,USE_FIQ=$(USE_FIQ) \
-	-Wa,--defsym,MODE_TEST=$(MODE_TEST) \
 	-Wa,--defsym,BOARD_GICC_BASE=$(BOARD_GICC_BASE) \
 	-Wa,--defsym,BOARD_IS_QEMU=$(BOARD_IS_QEMU) \
 	-Wa,--defsym,USE_FREERTOS=$(FREERTOS)
 
-ifeq ($(MODE_TEST),1)
-  CFLAGS += -DMODE_TEST
+ifeq ($(TEST),1)
+CFLAGS += -DMODE_TEST
 endif
 
-
-# FreeRTOS battery (make FREERTOS=1). The ONE FreeRTOS binary: FreeRTOS scheduler + heap_4,
-# with every bench (allocator sweeps + the task-stacking scheduler sweep) run as FreeRTOS
-# tasks. FREERTOS=0 is the Kairos battery; the default build and de1-soc.ld carry no
-# FreeRTOS references. workload_allocsweep.c/workload_fragsweep.c are allocator-agnostic
-# (USE_FREERTOS -> pvPortMalloc/vPortFree) and shared with the Kairos battery.
+# FreeRTOS needs NEON (softfp), its own include tree, and a second heap linker fragment.
 LDSCRIPT_FLAGS := -T $(LDSCRIPT)
 ifeq ($(FREERTOS),1)
-  FK := freertos_port/FreeRTOS-Kernel
-  CORE += $(FK)/portable/MemMang/heap_4.c freertos_port/freertos_heap_shim.c \
-          $(FK)/tasks.c $(FK)/list.c $(FK)/queue.c \
-          $(FK)/portable/GCC/ARM_CA9/port.c \
-          $(FK)/portable/GCC/ARM_CA9/portASM.S \
-          freertos_port/freertos_glue.c freertos_port/freertos_main.c \
-          bench/workload_freertos_schedsweep.c
-  CFLAGS += -DUSE_FREERTOS=1 -mfpu=neon -mfloat-abi=softfp \
-            -Ifreertos_port/libc_shim -Ifreertos_port \
-            -Ifreertos_port/FreeRTOS-Kernel/include \
-            -Ifreertos_port/FreeRTOS-Kernel/portable/GCC/ARM_CA9
-  LDSCRIPT_FLAGS := -Wl,-dT,$(LDSCRIPT) -Wl,-T,linker/freertos_heap.ld
+CFLAGS += -DUSE_FREERTOS=1 -mfpu=neon -mfloat-abi=softfp \
+          -Ifreertos_port/libc_shim -Ifreertos_port \
+          -Ifreertos_port/FreeRTOS-Kernel/include \
+          -Ifreertos_port/FreeRTOS-Kernel/portable/GCC/ARM_CA9
+LDSCRIPT_FLAGS := -Wl,-dT,$(LDSCRIPT) -Wl,-T,linker/freertos_heap.ld
 endif
-
 
 LDFLAGS := \
 	$(LDSCRIPT_FLAGS) \
@@ -196,7 +178,6 @@ LDFLAGS := \
 	-Wl,--defsym=_cfg_enable_l2=$(ENABLE_L2) \
 	-Wl,--defsym=_cfg_enable_smp=$(ENABLE_SMP)
 
-
 LIBGCC := $(shell $(CC) -mcpu=cortex-a9 -marm -print-libgcc-file-name)
 
 
@@ -204,8 +185,7 @@ LIBGCC := $(shell $(CC) -mcpu=cortex-a9 -marm -print-libgcc-file-name)
 # Build
 # ---------------------------------------------------------------------------
 
-# Compile to named objects (mirrored under build/) so the linker can place text
-# by object-file path -- bench/workload_*.o -> SDRAM .appcode, everything else OCRAM.
+# Named objects (mirrored under build/) so the linker places text by object path.
 OBJ := $(patsubst %,build/%.o,$(basename $(CORE)))
 
 build/%.o: %.c
@@ -226,44 +206,34 @@ build/test.elf: $(OBJ) $(LDSCRIPT)
 
 
 # ---------------------------------------------------------------------------
-# Test: build the test image (TEST=1) + drive the harness over JTAG.
+# Targets
 # ---------------------------------------------------------------------------
 
+# Build the test image and drive the harness over JTAG.
 test:
 	$(MAKE) TEST=1 build/test.elf
 	python3 test.py
 
-
-# ---------------------------------------------------------------------------
-# Self-boot: the ONE test image + the BOOT_TEST gate, wrapped as a preloader and
-# written to the microSD's 0xA2 partition (scripts/flash_sd.sh locates the card
-# safely and writes only that slice -- no reformat). Power-cycle, then drive with
-# `python test.py --bootable`. Force-rebuilds test.elf (only a -D flag changes,
-# which make can't see in timestamps); `make clean` afterwards before a normal
-# `make test` so the gate isn't left compiled in. `make boot FLASH_DRYRUN=1`
-# detects the card and stops before writing.
-# ---------------------------------------------------------------------------
-
+# Self-boot: wrap the test image as a preloader and write it + app.bin to the SD's
+# 0xA2 partition (scripts/flash_sd.sh). Power-cycle, then drive with test.py --bootable.
 boot:
 	rm -rf build
 	$(MAKE) BOOT_TEST=1 TEST=1 build/test.elf
-	$(OBJCOPY) -O binary -R .appcode -R .kern_sdram -R .kern_sdram_bss build/test.elf build/preloader.bin
-	$(OBJCOPY) -O binary -j .appcode -j .kern_sdram -j .kern_sdram_bss build/test.elf build/app.bin
+	$(OBJCOPY) -O binary -R .appcode -R .kern_sdram -R .sdram_bss build/test.elf build/preloader.bin
+	$(OBJCOPY) -O binary -j .appcode -j .kern_sdram build/test.elf build/app.bin
 	@echo "preloader.bin: $$(wc -c < build/preloader.bin) bytes (OCRAM; must fit the boot ROM budget)"
 	@echo "app.bin:       $$(wc -c < build/app.bin) bytes (SDRAM app/test code; load_from_sd reads this from SD)"
 	mkimage -T socfpgaimage -d build/preloader.bin build/preloader.img && echo "wrote build/preloader.img"
 	FLASH_DRYRUN=$(FLASH_DRYRUN) bash scripts/flash_sd.sh build/preloader.img
-	@echo "NOTE: app.bin must still be written to the card at SD_APPCODE_LBA (see bsp/sd.c) -- flash_sd.sh does not place it yet."
-
 
 clean:
 	rm -rf build
 
 
-# Lint = two analyzers over our sources (warnings are off in the normal build).
-# Skips bsp/sequencer.c (vendor-generated Altera SDRAM calibration; its sign-compare/
-# unused noise isn't ours to fix). Both track the ENABLE_* config, so e.g.
-# `make ENABLE_SMP=0 lint` lints that variant. Lints the full test image.
+# ---------------------------------------------------------------------------
+# Lint: two analyzers over our sources; skips bsp/sequencer.c (vendor Altera calibration).
+# ---------------------------------------------------------------------------
+
 LINT_WARN := -Wall -Wextra -Wshadow -Wundef -Wpointer-arith
 LINT_SRC  := $(filter-out bsp/sequencer.c,$(filter %.c,$(CORE) $(TEST_INFRA) $(TEST_WORKLOADS)))
 

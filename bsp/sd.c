@@ -78,8 +78,8 @@
 
 
 /* Linker-defined bounds of the SDRAM application-code region (de1-soc.ld). */
-extern char _appcode_start[];
-extern char _appcode_end[];
+extern char _sdram_blob_start[];
+extern char _sdram_blob_end[];
 
 
 /* Make a region that was written through the data side fetchable as code: clean
@@ -152,7 +152,7 @@ static int read_block(uint32_t lba, uint32_t* dst)
 
 void load_from_sd(void)
 {
-    uint32_t size = (uint32_t)(_appcode_end - _appcode_start);
+    uint32_t size = (uint32_t)(_sdram_blob_end - _sdram_blob_start);
     if (size == 0u)
     {
         return;   /* no app-code relocated to SDRAM yet */
@@ -191,7 +191,7 @@ void load_from_sd(void)
     if (!found) return;
 
     uint32_t app_lba = a2_lba + APP_OFFSET_SECTORS;
-    uint32_t* dst = (uint32_t*)_appcode_start;
+    uint32_t* dst = (uint32_t*)_sdram_blob_start;
     for (uint32_t b = 0u; b < blocks; b++)
     {
         if (read_block(app_lba + b, dst + b * SD_BLOCK_WORDS) != 0)
@@ -200,5 +200,5 @@ void load_from_sd(void)
         }
     }
 
-    make_region_executable((uintptr_t)_appcode_start, (uintptr_t)_appcode_end);
+    make_region_executable((uintptr_t)_sdram_blob_start, (uintptr_t)_sdram_blob_end);
 }

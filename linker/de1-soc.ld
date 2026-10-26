@@ -57,49 +57,23 @@ SECTIONS
 
 
 
-    /*  All appcode lives in SDRAM
-     *  Some of the kernel also lives in SDRAM
-     * */
     .kern_sdram ORIGIN(SDRAM) + _post_heap_offset :
     {
         . = ALIGN(8);
-        _appcode_start = .;
+        _sdram_blob_start = .;
 
-        *sched.o(.text*)
-        *min_heap.o(.text*)
-        *telemetry.o(.text*)
-        *gic.o(.text*)
-        *timers.o(.text*)
-        *tlsf.o(.text*)
-        *lock.o(.text*)
-        *thread.o(.text*)
-        *thread_fifo.o(.text*)
-        *irq.o(.text*)
+        *sched.o(.text* .rodata*)
+        *min_heap.o(.text* .rodata*)
+        *telemetry.o(.text* .rodata*)
+        *gic.o(.text* .rodata*)
+        *timers.o(.text* .rodata*)
+        *tlsf.o(.text* .rodata*)
+        *lock.o(.text* .rodata*)
+        *thread.o(.text* .rodata*)
+        *thread_fifo.o(.text* .rodata*)
+        *irq.o(.text* .rodata*)
 
         . = ALIGN(8);
-    } > SDRAM
-
-
-    /* .bss of the SDRAM-resident kernel objects. NOT NOLOAD: it sits inside the
-     * [_appcode_start, _appcode_end) blob as zero fill, so load_from_sd copies the
-     * zeros in -- the reset-time bss_zero runs before SDRAM is up and cannot reach
-     * here, and g_cpus/g_allocator_mutex are locked (relying on zero) in psched_init. */
-    .kern_sdram_bss : ALIGN(8)
-    {
-        _kern_sdram_bss_start = .;
-        *sched.o(.bss* COMMON)
-        *min_heap.o(.bss* COMMON)
-        *thread.o(.bss* COMMON)
-        *thread_fifo.o(.bss* COMMON)
-        *gic.o(.bss* COMMON)
-        *timers.o(.bss* COMMON)
-        *tlsf.o(.bss* COMMON)
-        *lock.o(.bss* COMMON)
-        *irq.o(.bss* COMMON)
-        *telemetry.o(.bss* COMMON)
-        *workload_*.o(.bss* COMMON)
-        . = ALIGN(8);
-        _kern_sdram_bss_end = .;
     } > SDRAM
 
 
@@ -107,22 +81,37 @@ SECTIONS
     {
         . = ALIGN(8);
 
-        *workload_edf.o(.text*)
-        *workload_allocbench.o(.text*)
-        *workload_rmw.o(.text*)
-        *workload_matmul.o(.text*)
-        *workload_micro.o(.text*)
-        *workload_suspend.o(.text*)
-        *workload_persistent.o(.text*)
-        *workload_allocsweep.o(.text*)
-        *workload_fragsweep.o(.text*)
-        *workload_schedsweep.o(.text*)
-        *workload_tickirq.o(.text*)
-        *workload_gantt.o(.text*)
-        *workload_freertos_schedsweep.o(.text*)
+        *workload_*.o(.text* .rodata*)
+
+        . = ALIGN(512);
+        _sdram_blob_end = .;
+    } > SDRAM
+
+
+    .sdram_bss (NOLOAD) :
+    {
+        . = ALIGN(8);
+        _sdram_bss_start = .;
+
+        _kern_sdram_bss_start = .;
+        *sched.o(.bss* COMMON)
+        *min_heap.o(.bss* COMMON)
+        *telemetry.o(.bss* COMMON)
+        *gic.o(.bss* COMMON)
+        *timers.o(.bss* COMMON)
+        *tlsf.o(.bss* COMMON)
+        *lock.o(.bss* COMMON)
+        *thread.o(.bss* COMMON)
+        *thread_fifo.o(.bss* COMMON)
+        *irq.o(.bss* COMMON)
+        _kern_sdram_bss_end = .;
+
+        _appcode_bss_start = .;
+        *workload_*.o(.bss* COMMON)
+        _appcode_bss_end = .;
 
         . = ALIGN(8);
-        _appcode_end = .;
+        _sdram_bss_end = .;
     } > SDRAM
 
 
@@ -344,7 +333,7 @@ SECTIONS
 
     /* Boot ROM copies the loaded image (vectors + code + rodata + data) into the
        64 KB OCRAM window; assert it fits that budget. */
-    ASSERT(_data_end - ORIGIN(OCRAM) <= 64K,
-        "OCRAM loaded image exceeds the 64K boot-ROM budget")
+    ASSERT(_data_end - ORIGIN(OCRAM) <= 0xF000,
+        "OCRAM loaded image exceeds the 60K boot-ROM budget (boot ROM keeps the top ~4K of OCRAM)")
 
 }

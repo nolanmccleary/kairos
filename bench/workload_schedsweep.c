@@ -19,19 +19,16 @@
 #define SCHED_MAX_TASKS 64u
 
 
-/* Task-count levels swept. */
-static const uint32_t sched_levels[] =
+/* Task-count levels swept (the x-axis). Compile-time const the host reads from the ELF. */
+const uint32_t g_schedsweep_levels[] =
 {
     1u, 2u, 4u, 8u, 16u, 32u, 64u
 };
 
-#define SCHED_N_LEVELS  ( sizeof( sched_levels ) / sizeof( sched_levels[ 0 ] ) )
+#define SCHED_N_LEVELS  ( sizeof( g_schedsweep_levels ) / sizeof( g_schedsweep_levels[ 0 ] ) )
 
-
-/* Host-readable: the x-axis (task counts) and, per level, the raw per-tick scheduler
- * overhead samples (cycles). test.py reduces each row to min/mean/p50/p99/max. */
-SDRAM_UNCACHED_TELEMETRY uint32_t g_schedsweep_levels[ SCHED_N_LEVELS ];
-SDRAM_UNCACHED_TELEMETRY uint32_t g_schedsweep_n;
+/* Per level, the raw per-tick scheduler overhead samples (cycles), written at runtime.
+ * test.py reduces each row to min/mean/p50/p99/max. */
 SDRAM_UNCACHED_TELEMETRY uint32_t g_schedsweep_samples[ SCHED_N_LEVELS ][ SCHED_SAMPLES ];
 SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_schedsweep_counts[ SCHED_N_LEVELS ];
 
@@ -78,14 +75,11 @@ void schedsweep_run( void )
     psched_init();
     __asm__ volatile ( "cpsie " PREEMPT_MASK ::: "memory" );
 
-    g_schedsweep_n = ( uint32_t ) SCHED_N_LEVELS;
-
     thread_t* handles[ SCHED_MAX_TASKS ];
 
     for( uint32_t li = 0; li < SCHED_N_LEVELS; li++ )
     {
-        uint32_t N = sched_levels[ li ];
-        g_schedsweep_levels[ li ] = N;
+        uint32_t N = g_schedsweep_levels[ li ];
         g_schedsweep_counts[ li ] = 0u;
 
         /* Load N underloaded periodic tasks on CPU0 (spread periods -> staggered

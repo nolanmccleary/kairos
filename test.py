@@ -164,6 +164,67 @@ def elf_symbols(elf: Path) -> dict[str, int]:
     return syms
 
 
+_elf_mem_cache: dict[str, dict[int, int]] = {}
+
+def _elf_mem(elf: Path) -> dict[int, int]:
+    # Byte-addressed contents of every loaded section (objdump -s), so the host can read
+    # compile-time constants straight from the ELF instead of off the target.
+    key = str(elf)
+    cached = _elf_mem_cache.get(key)
+    if cached is not None:
+        return cached
+    out = subprocess.check_output(["arm-none-eabi-objdump", "-s", str(elf)], cwd=ROOT, text=True)
+    mem: dict[int, int] = {}
+    for line in out.splitlines():
+        m = re.match(r"^\s+([0-9a-fA-F]+)\s+([0-9a-fA-F ]+?)\s{2,}", line)
+        if not m:
+            continue
+        addr = int(m.group(1), 16)
+        data = m.group(2).replace(" ", "")
+        for i in range(0, len(data) - 1, 2):
+            mem[addr + i // 2] = int(data[i:i+2], 16)
+    _elf_mem_cache[key] = mem
+    return mem
+
+
+def elf_read_words(elf: Path, addr: int, count: int) -> list[int]:
+    mem = _elf_mem(elf)
+    words = []
+    for w in range(count):
+        base = addr + 4 * w
+        try:
+            raw = bytes(mem[base + k] for k in range(4))
+        except KeyError:
+            raise RuntimeError(f"0x{base:08x} is not in a loaded ELF section (not a loaded const?)")
+        words.append(int.from_bytes(raw, "little"))
+    return words
+
+
+_elf_size_cache: dict[str, dict[str, int]] = {}
+
+def elf_sym_sizes(elf: Path) -> dict[str, int]:
+    key = str(elf)
+    cached = _elf_size_cache.get(key)
+    if cached is not None:
+        return cached
+    out = subprocess.check_output(["arm-none-eabi-nm", "-S", str(elf)], cwd=ROOT, text=True)
+    sizes = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 4:          # addr size type name
+            sizes[parts[3]] = int(parts[1], 16)
+    _elf_size_cache[key] = sizes
+    return sizes
+
+
+def elf_const(symbols: dict[str, int], name: str, count: int | None = None) -> list[int]:
+    # Value of a compile-time const global, read from the ELF (never off the target).
+    # count=None reads the whole symbol (word count from its ELF size).
+    if count is None:
+        count = max(1, elf_sym_sizes(TEST_ELF).get(name, 4) // 4)
+    return elf_read_words(TEST_ELF, symbols[name], count)
+
+
 def require_symbols(symbols: dict[str, int], names: Sequence[str]) -> None:
     missing = [n for n in names if n not in symbols]
     if missing:
@@ -1133,7 +1194,7 @@ def balance_test(ocd: OCD, symbols: dict[str, int], num_cpus: int) -> BalanceRes
     ocd.expect_breakpoint(bp_ready, timeout=15.0)
 
     assign  = tuple(ocd.read_words(symbols["g_bal_assign"], BAL_TASKS))
-    periods = tuple(ocd.read_words(symbols["g_bal_periods"], BAL_TASKS))
+    periods = tuple(elf_const(symbols, "g_bal_periods", BAL_TASKS))
 
     # Let both cores run the balanced set for a measurement window.
     ocd.continue_from_breakpoint()
@@ -1395,11 +1456,11 @@ def persistent_test(ocd: OCD, symbols: dict[str, int], num_cpus: int) -> Persist
     ocd.continue_from_breakpoint()
     ocd.expect_breakpoint(bp_ready, timeout=20.0)
 
-    periodic_assign  = tuple(ocd.read_words(symbols["g_pp_periodic_assign"], PP_NPERIODIC))
-    periodic_periods = tuple(ocd.read_words(symbols["g_pp_periods"], PP_NPERIODIC))
-    persist_ids      = tuple(ocd.read_words(symbols["g_pp_persist_ids"], PP_NPERSIST))
-    persist_prio     = tuple(ocd.read_words(symbols["g_pp_persist_prio"], PP_NPERSIST))
-    persist_assign   = tuple(ocd.read_words(symbols["g_pp_persist_assign"], PP_NPERSIST))
+    periodic_assign  = tuple(ocd.read_words(symbols["g_persistent_periodic_assign"], PP_NPERIODIC))
+    periodic_periods = tuple(elf_const(symbols, "g_persistent_periodic_periods", PP_NPERIODIC))
+    persist_ids      = tuple(elf_const(symbols, "g_persistent_thread_ids", PP_NPERSIST))
+    persist_prio     = tuple(elf_const(symbols, "g_persistent_thread_priorities", PP_NPERSIST))
+    persist_assign   = tuple(ocd.read_words(symbols["g_persistent_thread_assign"], PP_NPERSIST))
 
     # Run both cores for the measurement window.
     ocd.continue_from_breakpoint()
@@ -1411,7 +1472,7 @@ def persistent_test(ocd: OCD, symbols: dict[str, int], num_cpus: int) -> Persist
 
     core_u        = tuple(v / 65536.0 for v in ocd.read_words(symbols["g_core_u_m"], num_cpus))
     misses        = tuple(ocd.read_words(symbols["g_misses_m"], num_cpus))
-    periodic_done = tuple(ocd.read_words(symbols["g_pp_periodic_done"], PP_NPERIODIC))
+    periodic_done = tuple(ocd.read_words(symbols["g_persistent_periodic_done"], PP_NPERIODIC))
 
     traces: list[bytes] = []
     for c in range(num_cpus):
@@ -1607,8 +1668,8 @@ def schedsweep_test(ocd: OCD, symbols: dict[str, int]) -> list[tuple[int, list[i
             raise RuntimeError(f"schedsweep stalled, pc=0x{pc:08x}:\n{ocd.diagnose()}")
         ocd.resume()
 
-    n      = min(ocd.read_u32(symbols["g_schedsweep_n"]), 32)
-    levels = ocd.read_words(symbols["g_schedsweep_levels"], n)
+    levels = elf_const(symbols, "g_schedsweep_levels")[:32]
+    n      = len(levels)
     counts = ocd.read_words(symbols["g_schedsweep_counts"], n)
     base   = symbols["g_schedsweep_samples"]
 
@@ -1722,10 +1783,10 @@ def tickirq_test(ocd: OCD, symbols: dict[str, int]) -> list[tuple[int, int, int,
             raise RuntimeError(f"tickirq stalled, pc=0x{pc:08x}:\n{ocd.diagnose()}")
         ocd.resume()
 
-    n         = min(ocd.read_u32(symbols["g_tickirq_n"]), 16)
-    periods   = ocd.read_words(symbols["g_tickirq_periods"], n)
+    periods   = elf_const(symbols, "g_tickirq_periods")[:16]
+    n         = len(periods)
     counts    = ocd.read_words(symbols["g_tickirq_count"], n)
-    run_ticks = ocd.read_u32(symbols["g_tickirq_run_ticks"])
+    run_ticks = elf_const(symbols, "g_tickirq_run_ticks")[0]
 
     print(f"\ntick-IRQ fire rates over {run_ticks} ticks (CPU0):")
     rows: list[tuple[int, int, int, bool]] = []
@@ -1839,11 +1900,11 @@ def main(bootable: bool = False) -> None:
 
         periods, u_values = (), ()
         if has("edf_run"):
-            u_count = ocd.read_u32(symbols["g_edf_u_count"])
+            u_count = elf_const(symbols, "g_edf_u_count")[0]
             if not 1 <= u_count <= 64:
                 raise RuntimeError(f"invalid EDF U count: {u_count}")
-            periods  = tuple(ocd.read_words(symbols["g_edf_periods"], EDF_TASKS))
-            u_values = tuple(ocd.read_words(symbols["g_edf_u_values"], u_count))
+            periods  = tuple(elf_const(symbols, "g_edf_periods", EDF_TASKS))
+            u_values = tuple(elf_const(symbols, "g_edf_u_values", u_count))
             print(f"EDF U sweep: {list(u_values)}")
             print(f"EDF periods: {list(periods)}\n")
 

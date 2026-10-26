@@ -12,199 +12,202 @@
 /* -------------------------------------------------------------------------
  * Persistent-thread test.
  *
- * Builds a tight periodic taskset (hard EDF, auto-balanced across both cores)
- * and layers persistent (round-robin, best-effort) threads under it, then
- * traces the schedule so the host can see:
+ * Builds a tight periodic taskset (hard EDF, auto-balanced across both cores) and layers
+ * persistent (round-robin, best-effort) threads under it, then traces the schedule so the
+ * host can see:
  *
- *   1. periodic always wins   -- periodic meet their deadlines (misses == 0)
- *      even at high utilization; persistent only ever run in the slack.
- *   2. persistent round-robin -- several threads at the SAME priority share the
- *      leftover evenly (equal run-ticks over a full rotation).
- *   3. strict priority levels -- MED/LOW persistent threads get ZERO time while
- *      a HIGH-priority persistent thread is alive.
- *   4. the balancer piles     -- add_persistent_thread balances on utilization,
- *      but an un-started persistent thread contributes 0 to it, so they all land
- *      on the same (less periodic-loaded) core. The other core's slack is wasted
- *      (idle) while the pile-on core's persistent threads are squeezed. The test
- *      records each thread's assigned core so the host can show this.
+ *   1. periodic always wins   -- periodic meet their deadlines (misses == 0) even at high
+ *      utilization; persistent only ever run in the slack.
+ *   2. persistent round-robin -- several threads at the SAME priority share the leftover
+ *      evenly (equal run-ticks over a full rotation).
+ *   3. strict priority levels -- medium/low persistent threads get ZERO time while a high
+ *      persistent thread is alive.
+ *   4. the balancer piles     -- add_persistent_thread balances on utilization, but an
+ *      un-started persistent thread contributes 0 to it, so they all land on the same
+ *      (less periodic-loaded) core. The other core's slack is wasted (idle) while the
+ *      pile-on core's persistent threads are squeezed. The test records each thread's
+ *      assigned core so the host can show this.
  *
- * Self-contained: brings the scheduler up, runs one measurement window, kills
- * its threads, tears back down. Reuses workload_edf.c's per-tick hook
- * (ktrace_edf_tick) via the shared trace_active flag + g_sched_trace buffer.
+ * Self-contained: brings the scheduler up, runs one measurement window, kills its threads,
+ * tears back down. Reuses workload_edf.c's per-tick hook (ktrace_edf_tick) via the shared
+ * trace_active flag + g_sched_trace buffer.
  * ------------------------------------------------------------------------- */
 
-#define PP_NPERIODIC   6u
-#define PP_NPERSIST    5u
+#define PERIODIC_TASK_COUNT      6u
+#define PERSISTENT_THREAD_COUNT  5u
 
-/* Summed utilization of ALL periodic tasks. The balancer splits them ~evenly,
- * so each core lands near PP_U_PERMILLE / (1000 * NUM_CPUS). 1500 -> ~0.75/core:
- * tight enough to pressure EDF, loose enough that the ~0.25/core slack lets the
- * persistent threads complete a few round-robin rotations inside the trace
- * window. Raise it for a tighter squeeze (fewer persistent rounds visible). */
-#define PP_U_PERMILLE  1500u
+/* Summed utilization of ALL periodic tasks. The balancer splits them ~evenly, so each
+ * core lands near PERIODIC_UTILIZATION_PERMILLE / (1000 * NUM_CPUS). 1500 -> ~0.75/core:
+ * tight enough to pressure EDF, loose enough that the ~0.25/core slack lets the persistent
+ * threads complete a few round-robin rotations inside the trace window. */
+#define PERIODIC_UTILIZATION_PERMILLE  1500u
 
-#define PP_CALIB_ITERS 200000u
+#define CALIBRATION_ITERS  200000u
 
-
-/* Trace ids. Periodic 0..5; persistent in disjoint decades so the host buckets
- * them by range. HIGH {10,11,12} share a level (round-robin among them); MED and
- * LOW sit below and should never run while a HIGH thread is alive. */
-#define PP_ID_HI_0   10u
-#define PP_ID_HI_1   11u
-#define PP_ID_HI_2   12u
-#define PP_ID_MED    20u
-#define PP_ID_LOW    30u
+#define WALK_BUFFER_LEN    2048u   /* high_priority_memory_walk stride buffer; power of two for the mask */
 
 
-const uint32_t g_pp_periods[PP_NPERIODIC] = { 40u, 50u, 60u, 80u, 100u, 120u };
+/* Trace ids. Periodic 0..5; persistent in disjoint decades so the host buckets them by
+ * range. The three high-priority ids share a level (round-robin among them); medium and
+ * low sit below and should never run while a high-priority thread is alive. */
+#define HIGH_PRIORITY_ID_0   10u
+#define HIGH_PRIORITY_ID_1   11u
+#define HIGH_PRIORITY_ID_2   12u
+#define MEDIUM_PRIORITY_ID   20u
+#define LOW_PRIORITY_ID      30u
 
-const uint32_t g_pp_persist_ids[PP_NPERSIST]  = { PP_ID_HI_0, PP_ID_HI_1, PP_ID_HI_2, PP_ID_MED, PP_ID_LOW };
-const uint32_t g_pp_persist_prio[PP_NPERSIST] = { HIGH_PRIORITY, HIGH_PRIORITY, HIGH_PRIORITY, MED_PRIORITY, LOW_PRIORITY };
 
-/* Host-visible outcomes (uncached host_shared, read straight over JTAG). */
-SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_pp_periodic_assign[PP_NPERIODIC];   /* periodic id -> core the balancer chose */
-SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_pp_periodic_done[PP_NPERIODIC];     /* periodic per-task completions */
-SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_pp_persist_assign[PP_NPERSIST];     /* persistent id -> core the balancer chose */
+/* Taskset descriptors are compile-time constants the host reads over JTAG. Kept as loaded
+ * consts in OCRAM (like workload_edf.c's) so they carry their values from boot, readable
+ * even at the pre-SDRAM boot gate, with no runtime populate step. */
+const uint32_t g_persistent_periodic_periods[PERIODIC_TASK_COUNT] = { 40u, 50u, 60u, 80u, 100u, 120u };
+
+const uint32_t g_persistent_thread_ids[PERSISTENT_THREAD_COUNT] =
+    { HIGH_PRIORITY_ID_0, HIGH_PRIORITY_ID_1, HIGH_PRIORITY_ID_2, MEDIUM_PRIORITY_ID, LOW_PRIORITY_ID };
+const uint32_t g_persistent_thread_priorities[PERSISTENT_THREAD_COUNT] =
+    { HIGH_PRIORITY, HIGH_PRIORITY, HIGH_PRIORITY, MED_PRIORITY, LOW_PRIORITY };
+
+/* Host-visible outcomes, read straight over JTAG. */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_persistent_periodic_assign[PERIODIC_TASK_COUNT];  /* periodic id -> core the balancer chose   */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_persistent_periodic_done[PERIODIC_TASK_COUNT];    /* periodic per-task completions            */
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_persistent_thread_assign[PERSISTENT_THREAD_COUNT];/* persistent id -> core the balancer chose */
 
 /* Owned by workload_edf.c; reused here. */
 extern uint32_t trace_active;
 extern volatile uint32_t g_trace_len[NUM_CPUS];
 
 
-static uint32_t pp_iters[PP_NPERIODIC];
+static uint32_t periodic_task_iters[PERIODIC_TASK_COUNT];
 
 
 /* -------------------------------------------------------------------------
  * Jobs
  * ------------------------------------------------------------------------- */
 
-static uint32_t pp_dummy = 0;
+static uint32_t work_sink = 0;
 __attribute__((noinline, noclone))
-static void pp_burn(uint32_t iters)
+static void burn_iterations(uint32_t iterations)
 {
-    for (uint32_t i = 0; i < iters; i++)
+    for (uint32_t i = 0; i < iterations; i++)
     {
-        pp_dummy++;
+        work_sink++;
     }
 }
 
 
-/* Periodic body: every balanced task runs this, reading its own id. Each lands
- * on exactly one core (balanced, added once), so g_pp_periodic_done is single-
- * writer per id -- no cross-core double count. */
-static sys_exit_e pp_periodic_job(void)
+/* Periodic body: every balanced task runs this, reading its own id. Each lands on exactly
+ * one core (balanced, added once), so g_persistent_periodic_done is single-writer per id. */
+static sys_exit_e periodic_task_job(void)
 {
-    uint32_t id = g_cpus[curr_core()].curr_thread->id;
+    uint32_t task_id = g_cpus[curr_core()].curr_thread->id;
 
-    pp_burn(pp_iters[id]);
+    burn_iterations(periodic_task_iters[task_id]);
 
-    g_pp_periodic_done[id]++;
+    g_persistent_periodic_done[task_id]++;
     return SYS_OK;
 }
 
 
-/* Persistent bodies: infinite loops (a persistent thread that returns just
- * FINISHES -- there is no re-release), so they run continuously and are sliced
- * by the scheduler. Four genuinely different inner loops: the scheduler treats
- * them identically, but distinct work (and distinct code) keeps the compiler
- * from folding them and makes each one's Gantt row mean something. volatile
- * sinks so none of it is dead-code-eliminated. */
-static volatile uint32_t pp_sink_a, pp_sink_b, pp_sink_c, pp_sink_d, pp_sink_e;
-static uint32_t pp_walk_buf[2048];
+/* Persistent bodies: infinite loops (a persistent thread that returns just FINISHES --
+ * there is no re-release), so they run continuously and are sliced by the scheduler. Four
+ * genuinely different inner loops so each one's Gantt row means something and the compiler
+ * can't fold them; volatile sinks keep them from being dead-code-eliminated. */
+static volatile uint32_t accumulate_sink, walk_sink, checksum_sink, bit_count_sink, spin_sink;
+static uint32_t walk_buffer[WALK_BUFFER_LEN];
 
-static sys_exit_e pp_hi_accum(void)      /* integer multiply/accumulate churn */
+static sys_exit_e high_priority_accumulate(void)    /* integer multiply/accumulate churn */
 {
-    uint32_t acc = 1u;
+    uint32_t accumulator = 1u;
     for (;;)
     {
-        acc = acc * 2654435761u + 1u;
-        pp_sink_a = acc;
+        accumulator = accumulator * 2654435761u + 1u;
+        accumulate_sink = accumulator;
     }
 }
 
-static sys_exit_e pp_hi_walk(void)       /* strided memory walk (cache pressure) */
+static sys_exit_e high_priority_memory_walk(void)   /* strided memory walk (cache pressure) */
 {
-    uint32_t i = 0u;
+    uint32_t walk_index = 0u;
     for (;;)
     {
-        pp_walk_buf[i & 2047u] += i;
-        i += 17u;
-        pp_sink_b = pp_walk_buf[i & 2047u];
+        walk_buffer[walk_index & (WALK_BUFFER_LEN - 1u)] += walk_index;
+        walk_index += 17u;
+        walk_sink = walk_buffer[walk_index & (WALK_BUFFER_LEN - 1u)];
     }
 }
 
-static sys_exit_e pp_hi_lcg(void)        /* linear-congruential / running checksum */
+static sys_exit_e high_priority_checksum(void)      /* running checksum via linear-congruential step */
 {
-    uint32_t x = 0x12345678u;
+    uint32_t checksum_state = 0x12345678u;
     for (;;)
     {
-        x = x * 1664525u + 1013904223u;
-        pp_sink_c ^= x;
+        checksum_state = checksum_state * 1664525u + 1013904223u;
+        checksum_sink ^= checksum_state;
     }
 }
 
-static sys_exit_e pp_med_popcount(void)  /* bit-population count sweep */
+static sys_exit_e medium_priority_bit_count(void)   /* bit-population count sweep */
 {
-    uint32_t x = 1u;
+    uint32_t value = 1u;
     for (;;)
     {
-        x += 1u;
-        pp_sink_d += (uint32_t)__builtin_popcount(x);
+        value += 1u;
+        bit_count_sink += (uint32_t)__builtin_popcount(value);
     }
 }
 
-static sys_exit_e pp_low_spin(void)      /* bare spin */
+static sys_exit_e low_priority_spin(void)           /* bare spin */
 {
     for (;;)
     {
-        pp_sink_e++;
+        spin_sink++;
     }
 }
 
 
-static sys_exit_e (*const PP_PERSIST_JOBS[PP_NPERSIST])(void) =
+static sys_exit_e (*const PERSISTENT_JOBS[PERSISTENT_THREAD_COUNT])(void) =
 {
-    pp_hi_accum,
-    pp_hi_walk,
-    pp_hi_lcg,
-    pp_med_popcount,
-    pp_low_spin
+    high_priority_accumulate,
+    high_priority_memory_walk,
+    high_priority_checksum,
+    medium_priority_bit_count,
+    low_priority_spin
 };
 
 
 /* -------------------------------------------------------------------------
- * Calibration (self-contained; mirrors workload_edf.c's, sized to pp_burn)
+ * Calibration (self-contained; mirrors workload_edf.c's, sized to burn_iterations)
  * ------------------------------------------------------------------------- */
 
-static inline uint32_t pp_rd_ticks(void)
+static inline uint32_t read_ticks(void)
 {
     return *(volatile uint32_t*)&g_cpus[curr_core()].ticks;
 }
 
-static uint32_t pp_cycles_per_tick(void)
+static uint32_t measure_cycles_per_tick(void)
 {
-    uint32_t tick = pp_rd_ticks();
-    while (pp_rd_ticks() == tick) {}
+    uint32_t tick = read_ticks();
+    while (read_ticks() == tick) {}
 
     uint32_t start = pmu_cycles();
-    tick = pp_rd_ticks();
+    tick = read_ticks();
 
-    while (pp_rd_ticks() < tick + 16u) {}
+    while (read_ticks() < tick + 16u) {}
 
     return (pmu_cycles() - start) / 16u;
 }
 
-static uint32_t pp_cycles_per_iter(void)
+static uint32_t measure_cycles_per_iter(void)
 {
     __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     uint32_t start = pmu_cycles();
-    pp_burn(PP_CALIB_ITERS);
+    burn_iterations(CALIBRATION_ITERS);
     uint32_t cycles = pmu_cycles() - start;
 
     __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
-    return cycles / PP_CALIB_ITERS;
+    return cycles / CALIBRATION_ITERS;
 }
 
 
@@ -218,49 +221,49 @@ void persistent_run(void)
     heap_init();            /* guarded: no-op if already live */
     psched_init();
 
-    for (uint32_t c = 0; c < NUM_CPUS; c++)
+    for (uint32_t core = 0; core < NUM_CPUS; core++)
     {
-        g_trace_len[c] = 0u;
+        g_trace_len[core] = 0u;
     }
 
-    uint32_t cycles_per_tick = pp_cycles_per_tick();
-    uint32_t cycles_per_iter = pp_cycles_per_iter();
+    uint32_t cycles_per_tick = measure_cycles_per_tick();
+    uint32_t cycles_per_iter = measure_cycles_per_iter();
 
-    for (uint32_t i = 0; i < PP_NPERIODIC; i++)
+    for (uint32_t i = 0; i < PERIODIC_TASK_COUNT; i++)
     {
-        uint32_t Ci_ticks = (PP_U_PERMILLE * g_pp_periods[i]) / (1000u * PP_NPERIODIC);
-        if (Ci_ticks < 1u) Ci_ticks = 1u;
+        uint32_t compute_ticks = (PERIODIC_UTILIZATION_PERMILLE * g_persistent_periodic_periods[i]) / (1000u * PERIODIC_TASK_COUNT);
+        if (compute_ticks < 1u) compute_ticks = 1u;
 
-        pp_iters[i] = (uint32_t)((uint64_t)Ci_ticks * cycles_per_tick / cycles_per_iter);
-        g_pp_periodic_done[i] = 0u;
+        periodic_task_iters[i]         = (uint32_t)((uint64_t)compute_ticks * cycles_per_tick / cycles_per_iter);
+        g_persistent_periodic_done[i]  = 0u;
     }
 
     g_test_release = 0u;
 
-    thread_t* periodic_handles[PP_NPERIODIC];
-    thread_t* persist_handles[PP_NPERSIST];
+    thread_t* periodic_handles[PERIODIC_TASK_COUNT];
+    thread_t* persistent_handles[PERSISTENT_THREAD_COUNT];
 
     /* Construction must not race the scheduler. */
     __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
     trace_active = 1u;
 
-    for (uint32_t i = 0; i < PP_NPERIODIC; i++)
+    for (uint32_t i = 0; i < PERIODIC_TASK_COUNT; i++)
     {
-        periodic_handles[i]     = add_periodic_thread(kMalloc(sizeof(thread_t)), pp_periodic_job, g_pp_periods[i], PERIODIC, i);
-        g_pp_periodic_assign[i] = (uint32_t)periodic_handles[i]->core;
+        periodic_handles[i]            = add_periodic_thread(kMalloc(sizeof(thread_t)), periodic_task_job, g_persistent_periodic_periods[i], PERIODIC, i);
+        g_persistent_periodic_assign[i] = (uint32_t)periodic_handles[i]->core;
     }
 
-    for (uint32_t i = 0; i < PP_NPERSIST; i++)
+    for (uint32_t i = 0; i < PERSISTENT_THREAD_COUNT; i++)
     {
-        persist_handles[i]     = add_persistent_thread(kMalloc(sizeof(thread_t)), PP_PERSIST_JOBS[i], g_pp_persist_ids[i],
-                                                       (persistent_thread_priority_e)g_pp_persist_prio[i]);
-        g_pp_persist_assign[i] = (uint32_t)persist_handles[i]->core;
+        persistent_handles[i]         = add_persistent_thread(kMalloc(sizeof(thread_t)), PERSISTENT_JOBS[i], g_persistent_thread_ids[i],
+                                                              (persistent_thread_priority_e)g_persistent_thread_priorities[i]);
+        g_persistent_thread_assign[i] = (uint32_t)persistent_handles[i]->core;
     }
 
     __asm__ __volatile__("dmb sy" ::: "memory");
 
-    /* Assignment is final here (nothing has run) -- host reads g_pp_*_assign. */
+    /* Assignment is final here (nothing has run) -- host reads g_persistent_*_assign. */
     KTRACE_PERSIST_READY();
 
     __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
@@ -270,21 +273,21 @@ void persistent_run(void)
 
     __asm__ __volatile__("cpsid " PREEMPT_MASK ::: "memory");
 
-    for (uint32_t i = 0; i < PP_NPERIODIC; i++)
+    for (uint32_t i = 0; i < PERIODIC_TASK_COUNT; i++)
     {
         kill_thread(periodic_handles[i]);
     }
-    for (uint32_t i = 0; i < PP_NPERSIST; i++)
+    for (uint32_t i = 0; i < PERSISTENT_THREAD_COUNT; i++)
     {
-        kill_thread(persist_handles[i]);
+        kill_thread(persistent_handles[i]);
     }
 
     __asm__ __volatile__("cpsie " PREEMPT_MASK ::: "memory");
 
     psched_deinit();
 
-    for (uint32_t i = 0; i < PP_NPERIODIC; i++) if (periodic_handles[i]) kFree(periodic_handles[i]);
-    for (uint32_t i = 0; i < PP_NPERSIST;  i++) if (persist_handles[i])  kFree(persist_handles[i]);
+    for (uint32_t i = 0; i < PERIODIC_TASK_COUNT; i++)     if (periodic_handles[i])   kFree(periodic_handles[i]);
+    for (uint32_t i = 0; i < PERSISTENT_THREAD_COUNT; i++) if (persistent_handles[i]) kFree(persistent_handles[i]);
 
     KTRACE_PERSIST_DONE();
 }
