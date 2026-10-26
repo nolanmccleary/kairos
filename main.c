@@ -54,7 +54,9 @@ void main(void)
     KTRACE_ALLOC_DONE();
 
     edf_run();
-    edf_balance_run();
+#if ENABLE_SMP
+    edf_balance_run();   /* load-balancer spread test: cross-core only */
+#endif
     micro_run();
     suspend_run();
     persistent_run();

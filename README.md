@@ -91,6 +91,44 @@ table, so the host reads the exact config back from the image.
 | `BOOT_TEST`         | `0`     | compile in the self-boot gate (set by `make boot`)            |
 | `BOARD`             | `cyclone_v` | `cyclone_v` (real HW) or `qemu` (vexpress-a9)             |
 
+The cache/MMU/SMP flags are not independent — the dependencies come from the A9 and are
+enforced as `#error` guards in `bsp/bsp.c` (an invalid combination fails the build):
+
+- **The MMU must be on to run at all.** With it off there are no page tables, so every access
+  is Strongly-Ordered — which faults on unaligned accesses (the compiler folds even
+  alignment-safe byte reads, e.g. the MBR parse in `load_from_sd`, into a single unaligned
+  `ldr`) and makes `LDREX`/`STREX` unusable. So an MMU-off image builds but can't run; every
+  runnable config has the MMU on.
+- **The D-cache is required only under SMP.** `LDREX`/`STREX` need *cacheable* memory (the A9's
+  exclusive monitor is tied to the cache line), and the SMP mutex (`kernel/mutex.s`) uses them.
+  Single-core has no second core to race, so `lock.c`'s `!ENABLE_SMP` path is a plain flag with
+  interrupt-masking for exclusion — no exclusives, so no cacheable requirement. So D-cache is
+  mandatory under SMP, optional single-core.
+- **`ENABLE_DCACHE` needs `ENABLE_MMU`** (build-time) — cacheability is a per-page MMU attribute;
+  with the MMU off there's nothing to mark cacheable. (Instruction fetch can be cached with the
+  MMU off, which is why `ENABLE_ICACHE` is the exception and stays free.)
+- **`ENABLE_L2` needs `ENABLE_MMU`** — the PL310 only caches MMU-marked outer-cacheable memory.
+- **`ENABLE_SMP` needs `ENABLE_MMU` + `ENABLE_DCACHE` + `ENABLE_L2` + the SCU** — cross-core
+  `LDREX`/`STREX` work by the SCU tracking the lock line in the L1 **data** cache over
+  Normal/Shareable/Cacheable memory, so the lock must be cached and coherent. The SCU is enabled
+  exactly when `ENABLE_SMP` is (not a separate flag). The I-cache is irrelevant. **L2 is not
+  optional under SMP on this SoC** (verified on HW): with the PL310 disabled, contended cross-core
+  coherent/exclusive writes take the SCU→PL310→L3 path out to the fabric and async-abort; with L2
+  enabled they resolve in the coherency layer. (Single-threaded code is fine with L2 off because
+  its exclusives are uncontended and resolve in the local L1.)
+
+The 10 runnable states (5 base × I-cache on/off) — MMU on in all of them:
+
+| cores  | MMU | D-cache | L2     | SMP/SCU | I-cache |
+|--------|-----|---------|--------|---------|---------|
+| dual   | on  | on      | on     | on      | on/off  |
+| single | on  | on/off  | on/off | off     | on/off  |
+
+SMP-only parts of the battery (the load-balance spread test, and the cross-core halves of EDF
+and the mutex/IPI micro-benchmarks) compile only when `ENABLE_SMP=1`; otherwise `NUM_CPUS`
+collapses to 1 and the balancer + per-core loops fold onto CPU0. The host harness keys each
+test on ELF-symbol presence, so a compiled-out test is simply skipped.
+
 ## Running the tests
 
 There are two ways to get a binary onto the chip. The JTAG flow is faster for iteration;

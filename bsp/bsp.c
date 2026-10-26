@@ -23,6 +23,18 @@
 #error ENABLE_SMP requires ENABLE_MMU (SCU coherency is over cacheable memory)
 #endif
 
+#if ENABLE_SMP && !ENABLE_DCACHE
+#error ENABLE_SMP requires ENABLE_DCACHE (cross-core LDREX/STREX need the lock line cached + SCU-coherent)
+#endif
+
+#if ENABLE_SMP && !ENABLE_L2
+#error ENABLE_SMP requires ENABLE_L2 (Cyclone V: contended cross-core coherent/exclusive writes async-abort with the PL310 disabled; verified on HW)
+#endif
+
+#if ENABLE_DCACHE && !ENABLE_MMU
+#error ENABLE_DCACHE requires ENABLE_MMU (cacheability comes from the page tables; MMU off = all memory Strongly-ordered)
+#endif
+
 
 
 

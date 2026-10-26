@@ -44,10 +44,9 @@ SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_u_permille;
 SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_C[NTASKS];
 SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_edf_done[NTASKS];
 
-SDRAM_UNCACHED_TELEMETRY volatile uint8_t  g_sched_trace[NUM_CPUS][TRACE_TICKS];
-SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_trace_len[NUM_CPUS];
+SDRAM_UNCACHED_TELEMETRY volatile uint8_t g_sched_trace[NUM_CPUS][TRACE_TICKS];
+/* trace_active + g_trace_len are shared trace state, now defined in ktrace.c (ktrace.h). */
 
-uint32_t        trace_active;   /* 1 while a trial is running (every trial is traced); shared with workload_persistent.c */
 static uint32_t task_iters[NTASKS];
 
 
@@ -404,7 +403,9 @@ void edf_run(void)
         for (uint32_t i = 0; i < NTASKS; i++)
         {
             g_edf_handles[CPU0][i] = add_periodic_thread_to_core(kMalloc(sizeof(thread_t)), CPU0, JOBS[i], g_edf_periods[i], PERIODIC, i);
+#if ENABLE_SMP
             g_edf_handles[CPU1][i] = add_periodic_thread_to_core(kMalloc(sizeof(thread_t)), CPU1, JOBS[i], g_edf_periods[i], PERIODIC, i);
+#endif
         }
 
         g_edf_armed = 1u;   /* task set complete -- watchdog live from here */
@@ -450,7 +451,9 @@ void edf_run(void)
         for (uint32_t i = 0; i < NTASKS; i++)
         {
             kill_thread(g_edf_handles[CPU0][i]);
+#if ENABLE_SMP
             kill_thread(g_edf_handles[CPU1][i]);
+#endif
         }
 
 
@@ -468,7 +471,9 @@ void edf_run(void)
         for (uint32_t i = 0; i < NTASKS; i++)
         {
             if (g_edf_handles[CPU0][i]) kFree(g_edf_handles[CPU0][i]);
+#if ENABLE_SMP
             if (g_edf_handles[CPU1][i]) kFree(g_edf_handles[CPU1][i]);
+#endif
         }
     }
 
@@ -481,6 +486,8 @@ void edf_run(void)
 }
 
 
+
+#if ENABLE_SMP   /* load-balance is intrinsically cross-core: nothing to balance on one core */
 
 /* -------------------------------------------------------------------------
  * Load-balance test: six equal u=0.25 periodic tasks (total 1.5) handed to the balancer
@@ -572,3 +579,5 @@ void edf_balance_run(void)
 
     KTRACE_BALANCE_DONE();
 }
+
+#endif  /* ENABLE_SMP (load-balance test) */

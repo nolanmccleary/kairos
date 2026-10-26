@@ -36,11 +36,11 @@
 #define PERIODIC_TASK_COUNT      6u
 #define PERSISTENT_THREAD_COUNT  5u
 
-/* Summed utilization of ALL periodic tasks. The balancer splits them ~evenly, so each
- * core lands near PERIODIC_UTILIZATION_PERMILLE / (1000 * NUM_CPUS). 1500 -> ~0.75/core:
- * tight enough to pressure EDF, loose enough that the ~0.25/core slack lets the persistent
- * threads complete a few round-robin rotations inside the trace window. */
-#define PERIODIC_UTILIZATION_PERMILLE  1500u
+/* Summed utilization of ALL periodic tasks, scaled by core count so the balancer lands
+ * ~0.75/core whether dual (1500) or single (750). Tight enough to pressure EDF, loose
+ * enough that the ~0.25/core slack lets the persistent threads complete a few round-robin
+ * rotations inside the trace window. */
+#define PERIODIC_UTILIZATION_PERMILLE  (750u * NUM_CPUS)
 
 #define CALIBRATION_ITERS  200000u
 
@@ -72,9 +72,7 @@ SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_persistent_periodic_assign[PERIODIC
 SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_persistent_periodic_done[PERIODIC_TASK_COUNT];    /* periodic per-task completions            */
 SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_persistent_thread_assign[PERSISTENT_THREAD_COUNT];/* persistent id -> core the balancer chose */
 
-/* Owned by workload_edf.c; reused here. */
-extern uint32_t trace_active;
-extern volatile uint32_t g_trace_len[NUM_CPUS];
+/* trace_active + g_trace_len are shared trace state declared in ktrace.h. */
 
 
 static uint32_t periodic_task_iters[PERIODIC_TASK_COUNT];

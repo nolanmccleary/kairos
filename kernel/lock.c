@@ -6,27 +6,62 @@
 volatile uint32_t g_spin_exit;
 
 
-extern void _lock_mutex_persistent(void* mutex);
+#if ENABLE_SMP
+
+
+extern void         _lock_mutex_persistent(void* mutex);
 extern mutex_lock_e _lock_mutex_best_effort(void* mutex);
-extern void _unlock_mutex(void* mutex);
+extern void         _unlock_mutex(void* mutex);
 
 
-void lock_mutex_persistent(mutex_t *mutex)
+void lock_mutex_persistent(mutex_t* mutex)
 {
     _lock_mutex_persistent(mutex);
-    (void)(0);
 }
 
 
-mutex_lock_e lock_mutex_best_effort(mutex_t *mutex)
+mutex_lock_e lock_mutex_best_effort(mutex_t* mutex)
 {
     return _lock_mutex_best_effort(mutex);
 }
 
 
+void unlock_mutex(mutex_t* mutex)
+{
+    _unlock_mutex(mutex);
+}
+
+#else
+
+
+void lock_mutex_persistent(mutex_t* mutex)
+{
+    *(volatile uint32_t*)mutex = 1u;
+}
+
+
+mutex_lock_e lock_mutex_best_effort(mutex_t* mutex)
+{
+    if (*(volatile uint32_t*)mutex != 0u)
+    {
+        return LOCK_FAIL;
+    }
+    *(volatile uint32_t*)mutex = 1u;
+    return LOCK_OK;
+}
+
+
+void unlock_mutex(mutex_t* mutex)
+{
+    *(volatile uint32_t*)mutex = 0u;
+}
+
+#endif
+
+
 mutex_lock_e lock_mutex_timeout(mutex_t* mutex, uint32_t timeout)
 {
-    mutex_lock_e lock = _lock_mutex_best_effort(mutex);
+    mutex_lock_e lock = lock_mutex_best_effort(mutex);
 
     if (lock == LOCK_FAIL)
     {
@@ -36,11 +71,3 @@ mutex_lock_e lock_mutex_timeout(mutex_t* mutex, uint32_t timeout)
 
     return lock;
 }
-
-
-void unlock_mutex(mutex_t* mutex)
-{
-    _unlock_mutex(mutex);
-    (void)(0);
-}
-

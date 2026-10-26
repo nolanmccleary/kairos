@@ -12,10 +12,10 @@ FREERTOS  ?= 0
 BOOT_TEST ?= 0
 
 ENABLE_MMU        ?= 1
-ENABLE_DCACHE     ?= 1
-ENABLE_ICACHE     ?= 1
-ENABLE_L2         ?= 1
-ENABLE_SMP        ?= 1
+ENABLE_DCACHE     ?= 0
+ENABLE_ICACHE     ?= 0
+ENABLE_L2         ?= 0
+ENABLE_SMP        ?= 0
 ENABLE_NULL_GUARD ?= 1
 USE_FIQ           ?= 0
 
@@ -70,8 +70,7 @@ CORE := \
 	kernel/irq.c \
 	kernel/lock.c \
 	kernel/timers.c \
-	kernel/fault.c \
-	kernel/mutex.s
+	kernel/fault.c
 
 # Host breakpoints, the per-tick trace hook, the metrics region; test images only.
 TEST_INFRA := bench/ktrace.c bench/telemetry.c
@@ -103,10 +102,18 @@ FREERTOS_SRC := \
 	$(FK)/portable/GCC/ARM_CA9/portASM.S \
 	freertos_port/freertos_glue.c \
 	freertos_port/freertos_main.c \
-	bench/workload_freertos_schedsweep.c
+	bench/workload_freertos_schedsweep.c \
+	bench/workload_allocsweep.c \
+	bench/workload_fragsweep.c
 
 # Assemble the final source list. TEST adds the infra; the Kairos workloads go in only
 # for the Kairos battery ($(TEST)$(FREERTOS) == 10); FreeRTOS brings its own payload.
+
+# The LDREX/STREX mutex (kernel/mutex.s) is SMP-only; single-core uses the plain flag in lock.c.
+ifeq ($(ENABLE_SMP),1)
+CORE += kernel/mutex.s
+endif
+
 ifeq ($(TEST),1)
 CORE += $(TEST_INFRA)
 endif

@@ -158,9 +158,11 @@ void ktrace_bp_gantt_done(void)
 }
 
 
-/* Trace infra lives in workload_edf.c and is reused by the gantt run. */
-extern uint32_t trace_active;
-extern volatile uint32_t g_trace_len[NUM_CPUS];
+/* Shared trace state: the per-tick schedule-trace index and the active flag. ktrace_edf_tick
+ * (workload_edf.c, when present) fills g_sched_trace at these indices; ktrace_irq_fire below
+ * and the workloads reuse them. */
+uint32_t                 trace_active;
+SDRAM_UNCACHED_TELEMETRY volatile uint32_t g_trace_len[NUM_CPUS];
 
 #define KTRACE_IRQ_EVENTS_MAX 512u
 
@@ -185,6 +187,16 @@ void ktrace_irq_fire(uint32_t core, uint32_t id, uint32_t cycles)
     g_irq_ev_cycles[n] = cycles;
     g_irq_ev_count     = n + 1u;
 }
+
+
+/* Weak no-op defaults for the kernel's instrumentation hooks. Workloads that record
+ * through them override with strong definitions (workload_micro.c: sched_cost/irq_ping/
+ * mutex_hold; workload_edf.c: edf_tick). An image without those workloads (the FreeRTOS
+ * battery) links the no-ops. */
+__attribute__((weak)) void ktrace_edf_tick(thread_t* running)             { (void)running; }
+__attribute__((weak)) void ktrace_sched_cost(uint32_t cost, int switched) { (void)cost; (void)switched; }
+__attribute__((weak)) void ktrace_irq_ping(void)                          { }
+__attribute__((weak)) void ktrace_mutex_hold(void)                        { }
 
 
 void ktrace_wait_release(void)

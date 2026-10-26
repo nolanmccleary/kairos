@@ -1342,12 +1342,13 @@ def suspend_test(ocd: OCD, symbols: dict[str, int]) -> SuspendResult:
     bp_done = symbols["ktrace_bp_suspend_done"]
     bp_fault = symbols["fault_trap"]
 
-    # Firmware is parked on bp_balance_done (micro is swapped out). The edf/balance
-    # breakpoints are all behind us now -- free them (including the one we're halted
-    # on) so we stay under the Cortex-A9 6-HW-breakpoint cap, then arm suspend-done.
+    # The edf/balance breakpoints are all behind us now -- free the ones that exist
+    # (balance is SMP-only, so it's absent single-core) so we stay under the Cortex-A9
+    # 6-HW-breakpoint cap, then arm suspend-done.
     for name in ("ktrace_bp_edf_ready", "ktrace_bp_edf_done",
                  "ktrace_bp_balance_ready", "ktrace_bp_balance_done"):
-        ocd.remove_hw_breakpoint(symbols[name])
+        if name in symbols:
+            ocd.remove_hw_breakpoint(symbols[name])
     ocd.add_hw_breakpoint(bp_done)
 
     # Both scenarios are self-terminating (budget-capped); poll rather than one

@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include "cpu.h"
 #include "pmu.h"
 #include "telemetry.h"
 #include "thread.h"
@@ -41,6 +42,10 @@ void ktrace_bp_gantt_done(void);
  * so the IRQ mark lines up with the thread lanes), core, and IRQ id. */
 void ktrace_irq_fire(uint32_t core, uint32_t id, uint32_t cycles);
 extern volatile uint32_t g_irq_ev_count;
+
+/* Shared trace state (defined in ktrace.c): per-tick schedule-trace index + active flag. */
+extern uint32_t trace_active;
+extern volatile uint32_t g_trace_len[NUM_CPUS];
 
 
 /* -------------------------------------------------------------------------
