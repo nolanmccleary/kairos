@@ -1,8 +1,4 @@
-# Kairos: Bootable A9 RTOS from Scratch
-
-## TLDR
-
-I hacked an A9 into thinking it's a real-time processor.
+# Building an RTOS from First Principles
 
 
 ## Contents
@@ -16,8 +12,9 @@ I hacked an A9 into thinking it's a real-time processor.
 7. [Allocator](#allocator)
 8. [Scheduler](#scheduler)
     - [Schedulability Bounds](#schedulability-bounds)
-    - [Latency](#latency)
-9. [Limitations](#limitations)
+    - [Interleaved IRQ's](#interleaved-irqs)
+9. [Latency](#latency)
+10. [Limitations](#limitations)
 
 
 ## Introduction
@@ -65,7 +62,7 @@ This is all to say we can combine the kernel with what would normally be conside
 
 As alluded to earlier, we are using a real A9 on a real SOC and so we have to worry about the physical hardware. Here's a picture:
 
-<img src="figures/a9_fig2.webp" alt="The A9-based Cyclone V hardware" width="700">
+<img src="figures/a9_fig2.webp" alt="The A9-based Cyclone V hardware" width="400">
 
 Not pictured here is the Snoop Control Unit (SCU) which is used to manage cache coherence between both core's L1 caches and the MMU which is used for physical to virtual address translation and required for engaging the L1 data cache. For Kairos we make use of both L1 caches, the L2 cache, and the SCU.
 
@@ -468,6 +465,95 @@ The figures below show EDF running on real hardware at different utilizations:
 The taskset runs completely clean up to $U \approx 0.99$ and only begins missing right as $U$ reaches 1. The reason it starts missing before $U=1.0$ can be explained as follows: In our previous example we showed that $U = 1.0$ for $(0.9, 1), (1, 10)$. However, this doesn't account for scheduler overhead. Real schedulers take time to run their context switches and that time eats into the slack. The real budget for task 1 might looks something more like $(0.9, 0.095, 0.05)$ where the last coordinate denotes time spent in the scheduler. There's also no guarantee this slack is constant, as it depends on the state of the EDF heaps, SDRAM access latency (thread control blocks nominally live in SDRAM which as shown above does not provide constant read latency), and possible heap operations (freeing of outgoing threads for example, these could be moved to a persistent garbage collection routine to preserve scheduler determinism if desired in the future).
 
 
+### Interleaved IRQ's 
+Right now we have periodic tasks and we have tasks which we set a deadline for i.e. "do by this time". And we re-release finished tasks of this type if they are periodic and the old deadline is expired. It would be nice to have a basic "when this thing happens do this thing" mechanism. We would ideally like this mechanism to be generic such that we could create new things of this type arbitrarily during runtime as needed. We would also like it to be relatively lightweight, such that there is a minimal distance between "thing happening" and "other thing being done". One way to do this is with a tick-driven interrupt mechanism wherein any given interrupt fires when the tick counter reaches some sort of deadline value. We can use min-heaps here as well so that we always know what the next upcoming interrupt is. These interrupts always take priority over EDF or RR tasks, run in IRQ mode, and are always serviced before the sys SP is changed to the next upcoming stack. They also don't have their own stacks or register state since they simply take the form of function calls in the `c_irq_handler`
+
+We need to be careful though, because if two interrupts need to be run at the same time one will temporarily block the other. To prevent this, we make the following assumptions:
+1. Interrupts mounted at arbitrary start time during runtime i.e. the first interrupt can occur whenever, it's the period we care about.
+2. We design the system such that interrup frequencies are harmonics of each other
+3. We assume no interrupt takes longer than a Worst-Case Execution Time (WCET) of ~4096 CPU cycles. Given the tick rate, we set the `WCET_TICKS` value to 1 (many more cycles so we're being very generous here), whcih at the moment is 1ms, more than enough time. If more resolution is desired the tick rate can be adjusted by adjusting gtimer parameters at boot. 
+4. Interrupt period is defined in ticks and a zero period is invalid so that means each interrupt must have a period of at least one tick. 
+5. The max number of interrupts is set to `MAX_IRQS`. Right now this constant is 100. 
+
+
+
+
+```C
+sys_exit_e  mount_tick_irq_to_core(irq_t* irq, cpu_core_e core, sys_exit_e (*func)(void), uint32_t period, uint32_t id)
+{
+    if (period == 0) return SYS_ERROR;
+
+    irq->core = core;
+    irq->func = func;
+    irq->timing.period = period;
+    irq->id = id;
+
+    lock_mutex_persistent(&g_cpus[core].core_mutex);
+    
+    if (g_cpus[core].irqHeap->curr_index == MAX_THREADS) //Heap full = no free spots
+    {
+        unlock_mutex(&g_cpus[core].core_mutex);
+        return SYS_ERROR;
+    }
+
+    for (size_t i = 0; i < MAX_IRQS; i++) //Should always find something
+    {
+        if (g_cpus[core].avail[i] == NULL) //Found free spot
+        {
+            if (i == 0) //First position is free 
+            {
+                if (g_cpus[core].irqHeap->curr_index > 0) //There must be other nonfree entries ahead of this one
+                {
+                    size_t j = 1;
+                    while (j < MAX_IRQS)
+                    {
+                        if (g_cpus[core].avail[j] != NULL) break;
+                        j++;
+                    }
+                    
+                    irq_t* next = g_cpus[core].avail[j];
+                    uint32_t rel = next->timing.release_time - (j * WCET_TICKS);
+
+                    while (lt_wrapped(rel, g_cpus[core].ticks)) rel += next->timing.period;
+
+                    irq->timing.release_time = rel;
+                }
+
+                else //no tick irqs mounted yet 
+                {
+                    irq->timing.release_time = g_cpus[core].ticks; //Will fire next sched preemption
+                }
+            }
+
+            else //space directly behind was taken 
+            {
+                irq->timing.release_time = g_cpus[core].avail[i-1]->timing.release_time + WCET_TICKS;
+            }
+
+            g_cpus[core].avail[i] = irq;
+            irq->md.avail_index = i;
+
+            break;
+        }
+    }
+    
+    min_heap_insert_node(g_cpus[core].irqHeap, (void*)irq, irq->timing.release_time); 
+    irq->md.status = IRQ_ARMED;
+
+    unlock_mutex(&g_cpus[core].core_mutex);
+    return SYS_OK;
+}
+```
+
+
+
+
+When mounting an IRQ, we use an array of `MAX_IRQS`, initially empty. The first IRQ occupies the first index. Mounting another afterwards we occupy the next index and add `WCET_TICKS` to it. Whenever we mount, we always walk until we find the first free index, then set the release time to `WCET_TICKS` plus whatever the release time of the previous entry was. The one edge case is when the zeroth entry has been unmounted but there are other live entries on the array; suppose the next one is at index k, we need to preserve `k * WCET_TICKS` ticks of separation between the release times of the two entries to ensure we can greedily insert k-1 new entries between in the future if needed. To do this we can get the release time of entry k, wind it back by `k*WCET_TICKS`, and keep incrementing it by entry k's period until it is passed the deadline. At this point the release time for the new entry is both in the future relative to our current tick count `k*WCET_TICKS` **some** release of entry k. Maybe not the next release but given assumption 1 that's okay. An alternate approach could have involved taking an initial value with which to base each entry's offsets off of at the very beginning but then calculating the release time would have involved either division or repeated addition with a growing number of operations as the tick counter progresses. Both of these are undesireable. 
+
+Below is a figure demonstrating the IRQ interleaver in conjunction with the two task families:
+
+<img src="figures/tick_irq_interleaved.png"  width="700">
+
 
 
 ### Latency
@@ -478,27 +564,23 @@ Speaking of jitter, here are some figures detailing the IRQ latency and context 
 
 <img src="figures/ctxsw_latency.png" alt="Context-switch cost in next_thread(): a full switch to a different task vs a resume of the same task" width="700">
 
-The A9 runs at 800 MHz, so each cycle is 1.25 ns. You can double-check the clock against the tick: the global timer runs at a quarter of the MPU clock (200 MHz), and `AUTOINC = 199999` gives one IRQ every 200000 counts, i.e. 1 kHz. We measure latency with the Performance Monitoring Unit (PMU)'s cycle counter, so every number below is a count of 1.25 ns cycles.
+The A9 runs at 800 MHz, so each cycle is 1.25 ns. The global timer runs at a quarter of the MPU clock (200 MHz), and `AUTOINC = 199999` gives one IRQ every 200000 counts, i.e. 1 kHz. We measure latency with the Performance Monitoring Unit (PMU)'s cycle counter, so every number below is a count of 1.25 ns cycles.
 
 IRQ dispatch has a 166 cycle median (~0.21 µs), with essentially everything inside 162–175 cycles and a single worst sample over 1024 trials of 236 cycles (~0.30 µs). The context switch inside `next_thread()` either resumes the same task or starts a new one. Starting a new one can require O(log n) heap operations, so it is slower and more variable: resuming costs ~706 cycles median (~0.88 µs), switching ~1124 cycles median (~1.41 µs), tailing to 1554 cycles (~1.94 µs) in the worst case. That is for one workload (3 periodic tasks, no persistent ones); we'll see shortly that the switch cost climbs as the EDF heap fills.
 
 For real-time work the timing variance matters more than the latency. IRQ dispatch varies by ~70 cycles (~90 ns) across its whole range, the switch by ~500 cycles (~0.6 µs), and both have short tails rather than fat ones. Against the 1 ms scheduler tick (200000 cycles) the worst-case switch is 0.8% of a tick and the worst-case IRQ dispatch is 0.12%. For periodic control/DSP work in the kHz range the per-event jitter sits three to four orders of magnitude below the deadline.
 
-So how does that stack up? FreeRTOS on a Cortex-M quotes ~86 cycles for its context switch in its own FAQ, and independent measurements land around [~220 cycles on a Cortex-M4](https://www.researchgate.net/figure/Time-for-FreeRTOS-task-context-switching-on-STM32F407IG-ARM-Cortex-M4-for_fig2_325358846). In cycles our ~1124 looks terrible, but cycles aren't comparable across parts clocked differently. A Cortex-M4 runs at ~100–180 MHz, so ~86–220 cycles is ~0.5–1.3 µs of wall-clock, comparable to our ~1.41 µs. The surprise is that we hit that on a dual-core A9 that drags caches, an MMU, and SMP coherence along while saving the full register file by hand. In absolute time we're basically even with the Cortex-M RTOS everyone benchmarks against. The one place the Cortex-M flatly wins is interrupt *entry*: its NVIC reaches the ISR in a hardware-fixed 12 cycles (~70 ns) with zero jitter, where our GIC path is ~0.21 µs with a small tail. The GIC just isn't built to guarantee fixed, low-latency entry, and there's nothing we can do about that.
+FreeRTOS on a Cortex-M quotes ~86 cycles for its context switch in its own FAQ, and independent measurements land around [~220 cycles on a Cortex-M4](https://www.researchgate.net/figure/Time-for-FreeRTOS-task-context-switching-on-STM32F407IG-ARM-Cortex-M4-for_fig2_325358846). However, a Cortex-M4 runs at ~100–180 MHz, so ~86–220 cycles is ~0.5–1.3 µs of wall-clock, comparable to our ~1.41 µs. The surprise is that we hit that on a dual-core A9 that drags caches, an MMU, and SMP coherence along while saving the full register file by hand. In absolute time we're basically even with the Cortex-M RTOS everyone benchmarks against. The one place the Cortex-M flatly wins is interrupt *entry*: its NVIC reaches the ISR in a hardware-fixed 12 cycles (~70 ns) with zero jitter, where our GIC path is ~0.21 µs with a small tail. The GIC just isn't built to guarantee fixed, low-latency entry, and there's nothing we can do about that.
 
 The verdict: for the firm/soft real-time periodic workloads this targets, the jitter is comfortably sufficient, negligible against millisecond-scale deadlines, and competitive in absolute time with FreeRTOS on a Cortex-M. This is a genuinely surprising result for a chip supposedly unfit for real-time usage. Where it would fall short is sub-microsecond *hard* determinism, tight interrupt-to-pin response, or MHz-rate edges, where the GIC tail and cache jitter matter and a bare Cortex-M (or the FPGA fabric) is the right tool, which is exactly the work you'd want to keep off the A9 anyway. 
 
 
-
-The Kairos EDF scheduler uses min-heaps. These incur a O(log n) worst case bound versus the O(1) bound of the simpler RR scheduler.
-
-To see what that costs in practice, we can sweep the per-tick scheduler work against the number of loaded tasks (1 to 64), single core, underloaded so each task does almost nothing and the curve isolates the scheduler's own bookkeeping rather than compute. The same sweep runs on both kernels on the same chip: Kairos times its `next_thread()` (the full per-tick switch decision), and FreeRTOS times `xTaskIncrementTick` under its own scheduler.
+The Kairos EDF scheduler uses min-heaps. These incur a O(log n) worst case bound versus the O(1) bound of the simpler RR scheduler. These are worst-case bounds though, and most of the time when we preempt we aren't swithing tasks, so the average case preemption overhead is still comparable.
 
 <img src="figures/schedsweep_kairos.png" alt="Kairos EDF: per-tick scheduler cost vs loaded task count" width="700">
 
 <img src="figures/schedsweep_freertos.png" alt="FreeRTOS fixed-priority: per-tick scheduler cost vs loaded task count" width="700">
 
-Two things stand out. First, both medians are flat: the common-case tick is cheap and barely moves with task count, ~708 cycles (~0.89 µs) for Kairos and ~357 cycles (~0.45 µs) for FreeRTOS, all the way out to 64 tasks. The O(log n) does not show up in the typical tick because the typical tick does not release anything. Secondly, the two diverge in the tails. FreeRTOS stays bounded: its worst sample is ~469 cycles at one task and ~505 cycles (~0.63 µs) at 64, essentially flat, because fixed-priority selection pulls the top ready task off a bitmap in O(1) and just walks whatever came due off the delayed list with no reordering. Kairos's tail climbs with task count: p99 goes 1072 to 1739 cycles and the worst single tick goes from 1296 cycles (~1.6 µs) at one task to 7271 cycles (~9.1 µs) at 64. That growth is due to minheap operations. EDF keeps the deadHeap set ordered by deadline and the relHeap set ordered by release time, so each release from relHeap is a O(log n) extract + insertion into deadHeap, and every finished periodic task is a O(log n) extract + insertion from deadHeap to relHeap. When several tasks come due in the same tick the worst-case tick stacks several of those on top of each other, so in the future a time-staggering mechanism may be a good idea for periodic tasks that are committed to the scheduler at the same time. 
 
 As we'd expect, fixed-priority is the cheaper and flatter scheduler here, roughly 2x less per tick at the baseline and a worst case that does not grow with the taskset. Kairos pays that premium for dynamic deadline ordering, the thing fixed-priority structurally cannot do, plus the dual-core balancing and the persistent class layered on top. And the premium is small against the deadline it has to clear: even Kairos's worst tick at 64 tasks is 3.6% of the 1 ms tick (200000 cycles), where FreeRTOS sits at 0.25%, so neither scheduler is anywhere near being the bottleneck for the kHz-scale periodic work this targets.
 
@@ -517,6 +599,9 @@ If it wasn't apparent by now this isn't a production-ready kernel at all. Here's
 5. The test code is kind of a mess
 6. Nothing set up for peripherals/other timers/other processor modes atm
 7. Did I mention the thing isn't robust?
+
+
+We can see the worst case context switch time is noticeably less favourable to EDF, as we'd expect. We also don't currently stagger EDF tasks, so we may run into situations where many get released/terminated on the same tick. This is less than ideal, so in the future a staggering mechanism such as the IRQ interleaver to allow runtime-declared tasks to be released on different ticks may be wise. It would also be a good idea to allow creation of static tasks / tick-driven IRQ's that don't need to be created at runtime (like in most self-respecting RTOSES) such that we could stagger them as needed, but this was less exciting to build so I haven't gotten around to it yet.  
 
 The reality is I've worked on this thing on and off for a few months now and most of the reward obtained has come firstly from implementing the kernel by hand because I'm weird and i like doing stuff like this and secondly from the joy of seeing an A9 do things that it was never advertised to do. The marginal effort to learning ratio required to go from where this project is now to something that could be mistaken for a hardened production-ready system is not worth it for me and I wanna start working on other things. As such, I've decided to release the project as-is with absolutely no guarantees of further updates. The code is available [here](https://github.com/nolanmccleary/kairos) and I would happily invite any discussions regarding test accuracy etc. The harness is kind of jank but if you have a DE1-SoC and an SD card you should be able to run everything and reproduce my results with minimal effort. 
 

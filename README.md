@@ -98,13 +98,9 @@ enforced as `#error` guards in `bsp/bsp.c`, so an invalid combination fails the 
   alignment-safe byte reads, e.g. the MBR parse in `load_from_sd`, into a single unaligned
   `ldr`) and makes `LDREX`/`STREX` unusable. An MMU-off image builds but can't run, so
   every runnable config has the MMU on.
-- **The D-cache must be on in every runnable config.** Under SMP the exclusive lock
+- **The D-cache must be on in SMP mode.** Under SMP the exclusive lock
   (`kernel/mutex.s`) needs cacheable memory, because the A9's exclusive monitor is tied to
-  the cache line. That's enforced by the `ENABLE_SMP` guard below. Single-core uses a plain
-  flag lock (`lock.c`'s `!ENABLE_SMP` path, no exclusives), so in principle it has no
-  cacheable requirement, but an all-uncached single-core image does not run the battery in
-  practice (observed on HW). So the D-cache is on in every runnable state below, and the
-  I-cache is the only cache you can toggle.
+  the cache line. Without it, cross-core locks using `LDREX` or `STREX` will not work.
 - **`ENABLE_DCACHE` needs `ENABLE_MMU`** (build-time): cacheability is a per-page MMU
   attribute, so with the MMU off there's nothing to mark cacheable. (Instruction fetch can
   be cached with the MMU off, which is why `ENABLE_ICACHE` is the exception and stays free.)
@@ -125,7 +121,7 @@ and D-cache on in all of them:
 | cores  | MMU | D-cache | L2     | SMP/SCU | I-cache |
 |--------|-----|---------|--------|---------|---------|
 | dual   | on  | on      | on     | on      | on/off  |
-| single | on  | on      | on/off | off     | on/off  |
+| single | on  | on/off  | on/off | off     | on/off  |
 
 The SMP-only parts of the battery (the load-balance spread test, and the cross-core halves
 of EDF and the mutex/IPI micro-benchmarks) compile only when `ENABLE_SMP=1`. Otherwise
